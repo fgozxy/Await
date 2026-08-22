@@ -7,12 +7,15 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
@@ -66,6 +69,10 @@ fun HomeScreen(
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<UpdateManager.UpdateInfo?>(null) }
     var downloadProgress by remember { mutableStateOf(-1) } // -1=未在下载，0~99=下载中，100=完成
+
+    // 分组管理
+    var showManageGroups by remember { mutableStateOf(false) }
+    var confirmDeleteGroup by remember { mutableStateOf<String?>(null) }
 
     // 分组筛选：null=全部，""=未分组，其他=指定分组名
     var selectedGroup by remember { mutableStateOf<String?>(null) }
@@ -142,6 +149,11 @@ fun HomeScreen(
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.SystemUpdateAlt, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("管理分组") },
+                            onClick = { menuOpen = false; showManageGroups = true },
+                            leadingIcon = { Icon(Icons.Default.Label, null) }
                         )
                     }
                 }
@@ -232,6 +244,71 @@ fun HomeScreen(
                 }
             },
             dismissButton = { TextButton({ deleting = null }) { Text("取消") } }
+        )
+    }
+
+    // ── 管理分组对话框 ──
+    if (showManageGroups) {
+        val groupCounts = events
+            .filter { it.group.isNotBlank() }
+            .groupingBy { it.group }
+            .eachCount()
+        AlertDialog(
+            onDismissRequest = { showManageGroups = false },
+            title = { Text("管理分组") },
+            text = {
+                if (groupCounts.isEmpty()) {
+                    Text("暂无分组", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Column(
+                        Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        groupCounts.toList().sortedBy { it.first }.forEach { (name, count) ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(name, style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        "$count 条日程",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { confirmDeleteGroup = name }) {
+                                    Icon(
+                                        Icons.Default.Delete, "删除分组 $name",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showManageGroups = false }) { Text("完成") }
+            }
+        )
+    }
+
+    // 删除分组二次确认
+    confirmDeleteGroup?.let { name ->
+        val count = events.count { it.group == name }
+        AlertDialog(
+            onDismissRequest = { confirmDeleteGroup = null },
+            title = { Text("删除分组「$name」？") },
+            text = { Text("该分组下 $count 条日程将变为未分组，日程本身不会被删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteGroup(name)
+                    if (selectedGroup == name) selectedGroup = null
+                    confirmDeleteGroup = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ confirmDeleteGroup = null }) { Text("取消") } }
         )
     }
 

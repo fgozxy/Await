@@ -47,6 +47,27 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 删除指定分组：该分组下所有日程移出分组（变回未分组），日程本身保留。
+     * 返回受影响的日程数；分组不存在返回 -1。
+     */
+    fun deleteGroup(groupName: String): Int {
+        val ctx = getApplication<Application>()
+        val list = EventStore.load(ctx)
+        var count = 0
+        for (i in list.indices) {
+            if (list[i].group == groupName) {
+                list[i] = list[i].copy(groupName = "")
+                count++
+            }
+        }
+        if (count > 0) {
+            EventStore.save(ctx, list)
+            refresh()
+        }
+        return if (count > 0) count else -1
+    }
+
     private fun refresh() {
         _events.value = EventStore.load(getApplication()).sortedWithDefault()
     }
