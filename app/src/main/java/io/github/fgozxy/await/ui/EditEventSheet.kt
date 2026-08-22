@@ -48,7 +48,8 @@ fun EditEventSheet(
     }
     var colorIndex by remember { mutableIntStateOf(initial?.colorIndex ?: 0) }
     var remindDays by remember {
-        mutableStateOf(initial?.remindDaysBefore?.toSet() ?: setOf(1))
+        // 默认「当天 + 提前1天」都提醒，避免只提前1天而日程就在今天时错过提醒
+        mutableStateOf(initial?.remindDaysBefore?.toSet() ?: setOf(0, 1))
     }
     var remindHour by remember { mutableIntStateOf(initial?.remindHour ?: 9) }
     var remindMinute by remember { mutableIntStateOf(initial?.remindMinute ?: 0) }
@@ -246,7 +247,7 @@ fun EditEventSheet(
                                 note = note.trim(),
                                 pinned = pinned,
                                 colorIndex = colorIndex,
-                                remindDaysBefore = (remindDays.ifEmpty { setOf(1) }).toList().sorted(),
+                                remindDaysBefore = (remindDays.ifEmpty { setOf(0) }).toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
                                 repeatCycle = cycle,

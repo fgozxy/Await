@@ -111,4 +111,28 @@ object NotificationHelper {
             .build()
         NotificationManagerCompat.from(context).notify(10086, notification)
     }
+
+    /**
+     * 立即发送一条测试通知，用于验证通知链路（权限 / 渠道 / 省电策略）是否正常。
+     * 返回是否成功发出。
+     */
+    fun showTestNotification(context: Context): Boolean {
+        if (!canNotify(context)) return false
+        val notification = NotificationCompat.Builder(context, CHANNEL_EVENTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("✅ Await 测试通知")
+            .setContentText("通知链路正常！到期的日程提醒会以同样方式送达。")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                "如果你能看到这条通知，说明通知权限和渠道都正常。\n" +
+                "如日程提醒仍未送达，请检查：\n" +
+                "1. 是否已授予「闹钟和提醒」权限\n" +
+                "2. 系统设置中是否允许本应用后台运行/自启动\n" +
+                "3. 提醒时刻是否已过去（已过去的时刻不会补发）"
+            ))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        NotificationManagerCompat.from(context).notify(999999, notification)
+        return true
+    }
 }

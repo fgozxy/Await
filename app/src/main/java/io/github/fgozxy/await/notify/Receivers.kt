@@ -29,14 +29,15 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 }
 
-/** 开机自启：恢复所有已注册的提醒闹钟 */
+/** 开机自启 / 时间变化：恢复所有已注册的提醒闹钟 */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
-            intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED
-        ) {
-            AlarmScheduler.scheduleAll(context)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_LOCKED_BOOT_COMPLETED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED -> AlarmScheduler.scheduleAll(context)
         }
     }
 }

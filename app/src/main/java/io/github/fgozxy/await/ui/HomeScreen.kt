@@ -10,7 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
@@ -35,8 +38,13 @@ import java.time.LocalDate
 @Composable
 fun HomeScreen(
     viewModel: EventViewModel,
-    onRequestExactAlarm: () -> Unit,
     showExactAlarmBanner: Boolean,
+    onRequestExactAlarm: () -> Unit,
+    showNotifBanner: Boolean = false,
+    onRequestNotif: () -> Unit = {},
+    showBattBanner: Boolean = false,
+    onRequestBatt: () -> Unit = {},
+    onTestNotification: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -78,6 +86,18 @@ fun HomeScreen(
                     }) {
                         Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "搜索")
                     }
+                    // ⋮ 菜单
+                    var menuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, "更多")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("发送测试通知") },
+                            onClick = { menuOpen = false; onTestNotification() },
+                            leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
+                        )
+                    }
                 }
             )
         },
@@ -90,8 +110,24 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            if (showNotifBanner) {
+                HealthBanner(
+                    "通知权限被关闭，提醒将无法显示",
+                    "去开启", onRequestNotif,
+                    container = MaterialTheme.colorScheme.errorContainer
+                )
+            }
             if (showExactAlarmBanner) {
-                ExactAlarmBanner(onRequestExactAlarm)
+                HealthBanner(
+                    "未授予精确闹钟权限，提醒可能延迟",
+                    "去授权", onRequestExactAlarm
+                )
+            }
+            if (showBattBanner) {
+                HealthBanner(
+                    "建议加入电池优化白名单，防止后台提醒被拦截",
+                    "去设置", onRequestBatt
+                )
             }
             if (filtered.isEmpty()) {
                 EmptyState()
@@ -131,18 +167,23 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ExactAlarmBanner(onClick: () -> Unit) {
-    Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.errorContainer) {
+private fun HealthBanner(
+    text: String,
+    actionLabel: String,
+    onClick: () -> Unit,
+    container: Color = MaterialTheme.colorScheme.errorContainer
+) {
+    Surface(tonalElevation = 2.dp, color = container) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "未授予精确闹钟权限，提醒可能延迟",
+                text,
                 Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall
             )
-            TextButton(onClick = onClick) { Text("去授权") }
+            TextButton(onClick = onClick) { Text(actionLabel) }
         }
     }
 }

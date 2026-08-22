@@ -25,7 +25,8 @@ object AlarmScheduler {
 
     /** 计算某日程下一次提醒的触发时间；没有未来提醒时返回 null */
     fun nextTrigger(event: Event, from: LocalDateTime = LocalDateTime.now()): LocalDateTime? {
-        val offsets = event.remindDaysBefore.distinct().sorted()
+        // 倒序检查：同一候选日中「提前天数大」的触发点更早到来，需优先命中
+        val offsets = event.remindDaysBefore.distinct().sortedDescending()
         if (offsets.isEmpty()) return null
 
         var candidate = event.date
