@@ -1,0 +1,114 @@
+package io.github.fgozxy.await.notify
+
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import io.github.fgozxy.await.MainActivity
+import io.github.fgozxy.await.R
+import io.github.fgozxy.await.data.Event
+
+/**
+ * 通知中心：负责渠道管理与所有通知的构建展示。
+ *
+ * 渠道设计：
+ *  - event_reminders : 单条日程的倒计时提醒（高优先级）
+ *  - daily_summary   : 每日日程汇总提醒（默认优先级）
+ */
+object NotificationHelper {
+
+    const val CHANNEL_EVENTS = "event_reminders"
+    const val CHANNEL_DAILY = "daily_summary"
+
+    fun ensureChannels(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_EVENTS,
+                "日程倒计时提醒",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "在日程临近时发送倒计时提醒" }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_DAILY,
+                "每日汇总提醒",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "每天固定时间汇总今日与即将到来的日程" }
+        )
+    }
+
+    private fun canNotify(context: Context): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        } else true
+
+    /** 展示单条日程提醒 */
+    fun showEventReminder(context: Context, event: Event) {
+        if (!canNotify(context)) return
+        val days = event.daysFromToday()
+        val whenText = when {
+            days == 0 -> "就是今天！"
+            days > 0 -> "还有 $days 天"
+            else -> "已过去 ${-days} 天"
+        }
+        val text = "${event.dateText()} · $whenText" +
+            (if (event.note.isNotBlank()) "\n${event.note}" else "")
+
+        val contentIntent = PendingIntent.getActivity(
+            context,
+            event.id.toInt(),
+            Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_EVENT_ID, event.id)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_EVENTS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("⏳ ${event.title}")
+            .setContentText("$whenText（${event.dateText()}）")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+
+        NotificationManagerCompat.from(context).notify(event.id.toInt(), notification)
+    }
+
+    /** 每日汇总通知 */
+    fun showDailySummary(context: Context, todayCount: Int, upcomingCount: Int, nearestTitle: String?, nearestDays: Int?) {
+        if (!canNotify(context)) return
+        if (todayCount == 0 && upcomingCount == 0) return
+        val text = buildString {
+            if (todayCount > 0) append("今天有 $todayCount 个日程")
+            if (nearestTitle != null && nearestDays != null && nearestDays > 0) {
+                if (isNotEmpty()) append("；")
+                append("最近的「$nearestTitle」还有 $nearestDays 天")
+            }
+        }
+        val contentIntent = PendingIntent.getActivity(
+            context, 10086,
+            Intent(context, MainActivity::class.java)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_DAILY)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Await · 今日日程速览")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(10086, notification)
+    }
+}
