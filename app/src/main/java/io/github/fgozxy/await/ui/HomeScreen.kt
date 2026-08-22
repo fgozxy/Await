@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
@@ -28,11 +29,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.theme.EventColors
+import io.github.fgozxy.await.update.UpdateManager
 import io.github.fgozxy.await.vm.EventViewModel
+import kotlinx.coroutines.launch
 import java.time.LocalDate
+import android.widget.Toast
 
 /** 首页：日程列表 + 搜索 + 新增入口 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,6 +59,14 @@ fun HomeScreen(
     var editing by remember { mutableStateOf<Event?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Event?>(null) }
+    // ── 应用内更新状态 ──
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val curVersion = remember { UpdateManager.currentVersion(context) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var updateInfo by remember { mutableStateOf<UpdateManager.UpdateInfo?>(null) }
+    var downloadProgress by remember { mutableStateOf(-1) } // -1=未在下载，0~99=下载中，100=完成
+
     // 分组筛选：null=全部，""=未分组，其他=指定分组名
     var selectedGroup by remember { mutableStateOf<String?>(null) }
 
@@ -106,6 +119,29 @@ fun HomeScreen(
                             text = { Text("发送测试通知") },
                             onClick = { menuOpen = false; onTestNotification() },
                             leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (checkingUpdate) "正在检查…" else "检查更新（当前 v$curVersion）") },
+                            enabled = !checkingUpdate,
+                            onClick = {
+                                menuOpen = false
+                                checkingUpdate = true
+                                scope.launch {
+                                    val result = UpdateManager.checkLatest(curVersion)
+                                    checkingUpdate = false
+                                    result.onSuccess { info ->
+                                        updateInfo = info
+                                        if (info == null)
+                                            Toast.makeText(context, "已是最新版本 ✅", Toast.LENGTH_SHORT).show()
+                                    }.onFailure {
+                                        Toast.makeText(
+                                            context,
+                                            "检查更新失败：${it.message}", Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Default.SystemUpdateAlt, null) }
                         )
                     }
                 }
@@ -192,6 +228,70 @@ fun HomeScreen(
                 }
             },
             dismissButton = { TextButton({ deleting = null }) { Text("取消") } }
+        )
+    }
+
+    // ── 应用内更新对话框 ──
+    updateInfo?.let { info ->
+        val downloading = downloadProgress in 0 until 100
+        val done = downloadProgress == 100
+        AlertDialog(
+            onDismissRequest = { if (!downloading) updateInfo = null },
+            title = { Text("发现新版本 ${info.versionName}") },
+            text = {
+                Column {
+                    Text(
+                        info.notes.take(600).ifBlank { "性能优化与问题修复" },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 10,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (downloadProgress >= 0) {
+                        Spacer(Modifier.height(12.dp))
+                        LinearProgressIndicator(
+                            progress = { (downloadProgress / 100f).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            when {
+                                done -> "下载完成，正在拉起安装器…"
+                                else -> "下载中 $downloadProgress%"
+                            },
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !downloading,
+                    onClick = {
+                        // Android 8+ 需先授予「安装未知应用」权限
+                        if (!UpdateManager.canInstall(context)) {
+                            UpdateManager.gotoInstallPermission(context)
+                            return@TextButton
+                        }
+                        scope.launch {
+                            downloadProgress = 0
+                            val r = UpdateManager.downloadApk(context, info) { p -> downloadProgress = p }
+                            r.onSuccess { uri ->
+                                updateInfo = null
+                                downloadProgress = -1
+                                UpdateManager.installApk(context, uri)
+                            }.onFailure {
+                                downloadProgress = -1
+                                Toast.makeText(context, "下载失败：${it.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (done) "安装" else if (downloading) "下载中…" else "下载并安装")
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !downloading, onClick = { updateInfo = null }) { Text("以后再说") }
+            }
         )
     }
 }
