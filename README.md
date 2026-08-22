@@ -40,11 +40,31 @@
 ```bash
 git clone https://github.com/fgozxy/Await.git
 cd Await
-./gradlew assembleDebug
-# APK 输出位于 app/build/outputs/apk/debug/
+./gradlew assembleDebug      # 调试版
+./gradlew assembleRelease    # 正式版（需签名配置）
 ```
 
 要求：JDK 17+，Android SDK 34。
+
+### 🔑 正式签名配置
+
+正式版需要签名密钥。在项目根目录创建 `keystore.properties`（已被 `.gitignore` 排除，不会提交）：
+
+```properties
+storeFile=keystore/await-release.keystore   # 密钥库路径
+storePassword=你的密钥库密码
+keyAlias=你的别名
+keyPassword=你的密钥密码
+```
+
+生成新密钥库：
+
+```bash
+keytool -genkeypair -v -keystore keystore/await-release.keystore \
+  -alias await -keyalg RSA -keysize 2048 -validity 10950
+```
+
+> ⚠️ 请妥善备份 `keystore.properties` 和密钥库文件。丢失后无法为已安装用户推送升级。
 
 ## 📄 许可证
 
