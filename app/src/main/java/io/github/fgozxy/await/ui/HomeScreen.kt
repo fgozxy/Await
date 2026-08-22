@@ -74,11 +74,11 @@ fun HomeScreen(
         query.isBlank() || it.title.contains(query, true) || it.note.contains(query, true)
     }
     // 现有分组列表（保持稳定排序）
-    val existingGroups = events.map { it.groupName }.filter { it.isNotBlank() }.distinct().sorted()
-    val hasUngrouped = events.any { it.groupName.isBlank() }
+    val existingGroups = events.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
+    val hasUngrouped = events.any { it.group.isBlank() }
 
     val filtered = matched.filter {
-        selectedGroup == null || it.groupName == selectedGroup
+        selectedGroup == null || it.group == selectedGroup
     }
     val groups = groupEvents(filtered)
 
@@ -464,7 +464,7 @@ private fun EventCard(
                     Spacer(Modifier.height(4.dp))
                     Text(
                         buildString {
-                            if (event.groupName.isNotBlank()) append("【${event.groupName}】 ")
+                            if (event.group.isNotBlank()) append("【${event.group}】 ")
                             append(event.dateText())
                             if (event.note.isNotBlank()) append("  ·  ${event.note}")
                         },

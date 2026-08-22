@@ -46,7 +46,7 @@ fun EditEventSheet(
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
     var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
-    var group by remember { mutableStateOf(initial?.groupName ?: "") }
+    var group by remember { mutableStateOf(initial?.group ?: "") }
     var everyDays by remember {
         mutableIntStateOf(initial?.repeatEveryDays?.takeIf { it > 0 } ?: 30)
     }
@@ -275,7 +275,7 @@ fun EditEventSheet(
                                 remindDaysBefore = (remindDays.ifEmpty { setOf(0) }).toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
-                                repeatCycle = cycle,
+                                repeatCycle = cycle.name,
                                 repeatEveryDays = if (cycle == Cycle.EVERY_N_DAYS) everyDays else 0,
                                 repeatYearly = false,
                                 groupName = group.trim()

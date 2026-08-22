@@ -29,10 +29,12 @@ enum class Cycle(val label: String) {
 /**
  * 一条倒数日日程。
  *
- * @param dateEpochDay 目标日期（本地时区，epoch day）
- * @param remindDaysBefore 提前提醒的天数列表；0 表示当天提醒，如 [0, 1, 3, 7]
- * @param remindHour / remindMinute 每次提醒的触发时刻
- * @param repeatCycle 循环周期（订阅制可选 MONTHLY 等）
+ * 注意：repeatCycle / groupName 在存储层使用 [String]（而非枚举/非空类型），
+ * 因为 Gson + R8 混淆环境下枚举序列化不可靠，且缺失字段会被置为 null；
+ * 通过下方 cycle / group 计算属性做安全归一化。
+ *
+ * @param repeatCycle 循环周期的名称，如 "MONTHLY"、"EVERY_N_DAYS"
+ * @param repeatEveryDays 每隔 N 天循环时的 N
  * @param repeatYearly 旧版字段，仅为兼容老数据保留；读取时若为 true 视作 YEARLY
  */
 data class Event(
@@ -45,15 +47,27 @@ data class Event(
     val remindDaysBefore: List<Int> = listOf(1),
     val remindHour: Int = 9,
     val remindMinute: Int = 0,
-    val repeatCycle: Cycle = Cycle.NONE,
+    val repeatCycle: String? = null,
     val repeatEveryDays: Int = 0,
     val repeatYearly: Boolean = false,
-    /** 自定义分组名（如「订阅」「生日」），空串表示未分组 */
-    val groupName: String = ""
+    /** 自定义分组名（如「订阅」「生日」），null/空串表示未分组 */
+    val groupName: String? = null
 ) {
-    /** 实际生效的循环周期（兼容旧数据的归一化结果） */
+    companion object {
+        /** 安全地把存储字符串解析为周期；解析失败（含 null、混淆改名等）一律回退 NONE */
+        private fun parseCycle(raw: String?): Cycle =
+            raw?.let { r -> Cycle.entries.firstOrNull { it.name == r } } ?: Cycle.NONE
+    }
+
+    /** 实际生效的循环周期（兼容旧数据 + 空值安全的归一化结果） */
     val cycle: Cycle
-        get() = if (repeatCycle == Cycle.NONE && repeatYearly) Cycle.YEARLY else repeatCycle
+        get() {
+            val parsed = parseCycle(repeatCycle)
+            return if (parsed == Cycle.NONE && repeatYearly) Cycle.YEARLY else parsed
+        }
+
+    /** 分组名的空安全版本；未分组返回空串 */
+    val group: String get() = groupName ?: ""
 
     /** 自定义循环的天数（1~3650，仅 EVERY_N_DAYS 时使用） */
     val everyDays: Int get() = repeatEveryDays.coerceIn(1, 3650)
