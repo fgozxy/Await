@@ -20,6 +20,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: EventViewModel
 
+    /** 精确闹钟权限状态：可观察，onResume 时刷新，授权返回后横幅自动消失 */
+    private val exactAlarmOk = mutableStateOf(true)
+
     /** Android 13+ 通知运行时权限 */
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -39,16 +42,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             AwaitTheme {
                 val context = LocalContext.current
-                var exactAlarmOk by remember {
-                    mutableStateOf(
-                        Build.VERSION.SDK_INT < 31 ||
-                            (getSystemService(android.app.AlarmManager::class.java))
-                                ?.canScheduleExactAlarms() != false
-                    )
-                }
                 HomeScreen(
                     viewModel = viewModel,
-                    showExactAlarmBanner = !exactAlarmOk,
+                    showExactAlarmBanner = !exactAlarmOk.value,
                     onRequestExactAlarm = {
                         context.startActivity(Intent(
                             Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
@@ -57,6 +53,17 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 每次回到前台（包括从系统设置授权页返回）都重新检查权限，
+        // 并顺带用新权限重排一次提醒，确保降级闹钟升级为精确闹钟
+        val am = getSystemService(android.app.AlarmManager::class.java)
+        exactAlarmOk.value = Build.VERSION.SDK_INT < 31 || am?.canScheduleExactAlarms() != false
+        if (exactAlarmOk.value) {
+            io.github.fgozxy.await.notify.AlarmScheduler.scheduleAll(this)
         }
     }
 
