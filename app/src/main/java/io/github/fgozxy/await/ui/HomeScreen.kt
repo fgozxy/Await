@@ -6,6 +6,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,9 +54,18 @@ fun HomeScreen(
     var editing by remember { mutableStateOf<Event?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Event?>(null) }
+    // 分组筛选：null=全部，""=未分组，其他=指定分组名
+    var selectedGroup by remember { mutableStateOf<String?>(null) }
 
-    val filtered = events.filter {
+    val matched = events.filter {
         query.isBlank() || it.title.contains(query, true) || it.note.contains(query, true)
+    }
+    // 现有分组列表（保持稳定排序）
+    val existingGroups = events.map { it.groupName }.filter { it.isNotBlank() }.distinct().sorted()
+    val hasUngrouped = events.any { it.groupName.isBlank() }
+
+    val filtered = matched.filter {
+        selectedGroup == null || it.groupName == selectedGroup
     }
     val groups = groupEvents(filtered)
 
@@ -129,9 +139,29 @@ fun HomeScreen(
                     "去设置", onRequestBatt
                 )
             }
-            if (filtered.isEmpty()) {
+            if (filtered.isEmpty() && (query.isNotBlank() || selectedGroup != null)) {
+                // 搜索/筛选无结果
+                Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("没有匹配的日程", style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { query = ""; selectedGroup = null }) {
+                        Text("清除筛选")
+                    }
+                }
+            } else if (filtered.isEmpty()) {
                 EmptyState()
             } else {
+                if (!searching && events.isNotEmpty()) {
+                    GroupFilterRow(
+                        groups = existingGroups,
+                        showUngrouped = hasUngrouped,
+                        selected = selectedGroup,
+                        onSelect = { selectedGroup = it }
+                    )
+                }
                 EventList(groups, viewModel,
                     onClick = { editing = it },
                     onLongClick = { deleting = it })
@@ -163,6 +193,45 @@ fun HomeScreen(
             },
             dismissButton = { TextButton({ deleting = null }) { Text("取消") } }
         )
+    }
+}
+
+/** 分组筛选行：全部 / 未分组 / 各分组 */
+@Composable
+private fun GroupFilterRow(
+    groups: List<String>,
+    showUngrouped: Boolean,
+    selected: String?,
+    onSelect: (String?) -> Unit
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item {
+            FilterChip(
+                selected = selected == null,
+                onClick = { onSelect(null) },
+                label = { Text("全部") }
+            )
+        }
+        if (showUngrouped) {
+            item {
+                FilterChip(
+                    selected = selected == "",
+                    onClick = { onSelect("") },
+                    label = { Text("未分组") }
+                )
+            }
+        }
+        items(groups.size, key = { groups[it] }) { i ->
+            val name = groups[i]
+            FilterChip(
+                selected = selected == name,
+                onClick = { onSelect(name) },
+                label = { Text(name) }
+            )
+        }
     }
 }
 
@@ -295,6 +364,7 @@ private fun EventCard(
                     Spacer(Modifier.height(4.dp))
                     Text(
                         buildString {
+                            if (event.groupName.isNotBlank()) append("【${event.groupName}】 ")
                             append(event.dateText())
                             if (event.note.isNotBlank()) append("  ·  ${event.note}")
                         },

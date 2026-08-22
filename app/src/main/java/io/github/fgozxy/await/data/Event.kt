@@ -47,7 +47,9 @@ data class Event(
     val remindMinute: Int = 0,
     val repeatCycle: Cycle = Cycle.NONE,
     val repeatEveryDays: Int = 0,
-    val repeatYearly: Boolean = false
+    val repeatYearly: Boolean = false,
+    /** 自定义分组名（如「订阅」「生日」），空串表示未分组 */
+    val groupName: String = ""
 ) {
     /** 实际生效的循环周期（兼容旧数据的归一化结果） */
     val cycle: Cycle

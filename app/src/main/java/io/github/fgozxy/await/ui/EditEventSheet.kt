@@ -29,6 +29,9 @@ private val REMIND_OPTIONS = listOf(
     15 to "提前15天", 30 to "提前30天"
 )
 
+/** 分组快捷预设 */
+private val GROUP_PRESETS = listOf("订阅", "生日", "纪念日", "工作", "学习")
+
 /** 新建 / 编辑日程的底部弹窗 */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -43,6 +46,7 @@ fun EditEventSheet(
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
     var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
+    var group by remember { mutableStateOf(initial?.groupName ?: "") }
     var everyDays by remember {
         mutableIntStateOf(initial?.repeatEveryDays?.takeIf { it > 0 } ?: 30)
     }
@@ -105,6 +109,27 @@ fun EditEventSheet(
                 minLines = 2,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // 分组
+            Column {
+                OutlinedTextField(
+                    value = group,
+                    onValueChange = { group = it },
+                    label = { Text("分组（可留空）") },
+                    placeholder = { Text("如：订阅、生日…") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GROUP_PRESETS.forEach { preset ->
+                        AssistChip(
+                            onClick = { group = preset },
+                            label = { Text(preset) }
+                        )
+                    }
+                }
+            }
 
             // 颜色选择
             Column {
@@ -252,7 +277,8 @@ fun EditEventSheet(
                                 remindMinute = remindMinute,
                                 repeatCycle = cycle,
                                 repeatEveryDays = if (cycle == Cycle.EVERY_N_DAYS) everyDays else 0,
-                                repeatYearly = false
+                                repeatYearly = false,
+                                groupName = group.trim()
                             )
                         )
                     },
