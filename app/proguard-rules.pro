@@ -1,5 +1,8 @@
 # Gson：保留 Event 模型字段名（JSON 反射序列化需要）
 -keep class io.github.fgozxy.await.data.Event { *; }
+
+# Gson：备份文件的外层结构（导出/导入、WebDAV 备份都用它）
+-keep class io.github.fgozxy.await.data.BackupData$Payload { *; }
 -keepattributes Signature
 -keepattributes *Annotation*
 

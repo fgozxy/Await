@@ -3,6 +3,7 @@ package io.github.fgozxy.await.notify
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import io.github.fgozxy.await.backup.BackupScheduler
 import io.github.fgozxy.await.data.EventStore
 
 /** 日程提醒触发入口 */
@@ -29,7 +30,7 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 }
 
-/** 开机自启 / 时间变化：恢复所有已注册的提醒闹钟 */
+/** 开机自启 / 时间变化 / 应用升级：恢复所有提醒闹钟与定时备份 */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -37,7 +38,11 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED -> AlarmScheduler.scheduleAll(context)
+            Intent.ACTION_TIMEZONE_CHANGED,
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                AlarmScheduler.scheduleAll(context)
+                BackupScheduler.reschedule(context)
+            }
         }
     }
 }

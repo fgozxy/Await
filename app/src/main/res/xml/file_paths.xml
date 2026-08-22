@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 更新包下载目录：内部存储，随应用卸载清理，系统不会中途回收 -->
+    <files-path name="updates" path="updates/" />
+</paths>

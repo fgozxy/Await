@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 全屏提醒：到点直接弹出应用内全屏页面（锁屏可见） -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- WebDAV 备份：判断网络是否可用后再上传 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".AwaitApp"
@@ -48,6 +50,11 @@
             android:name=".notify.AlarmReceiver"
             android:exported="false" />
 
+        <!-- 定时 WebDAV 备份的闹钟入口 -->
+        <receiver
+            android:name=".backup.BackupAlarmReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".notify.BootReceiver"
             android:exported="true">
@@ -56,7 +63,20 @@
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <!-- 应用升级后恢复闹钟与备份计划 -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <!-- 安装更新包：Android 7+ 必须通过 content:// 授权给系统安装器，file:// 会直接抛异常 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 </manifest>

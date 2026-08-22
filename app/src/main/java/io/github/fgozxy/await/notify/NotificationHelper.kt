@@ -20,11 +20,13 @@ import io.github.fgozxy.await.data.Event
  * 渠道设计：
  *  - event_reminders : 单条日程的倒计时提醒（高优先级）
  *  - daily_summary   : 每日日程汇总提醒（默认优先级）
+ *  - backup          : 定时备份失败提示（低优先级，不打扰）
  */
 object NotificationHelper {
 
     const val CHANNEL_EVENTS = "event_reminders"
     const val CHANNEL_DAILY = "daily_summary"
+    const val CHANNEL_BACKUP = "backup"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -41,6 +43,13 @@ object NotificationHelper {
                 "每日汇总提醒",
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply { description = "每天固定时间汇总今日与即将到来的日程" }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_BACKUP,
+                "备份提醒",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "定时 WebDAV 备份失败时提示" }
         )
     }
 
@@ -113,6 +122,27 @@ object NotificationHelper {
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(context).notify(10086, notification)
+    }
+
+    /** 定时备份失败提示：只在失败时打扰一次，成功静默 */
+    fun showBackupFailed(context: Context, reason: String) {
+        if (!canNotify(context)) return
+        val contentIntent = PendingIntent.getActivity(
+            context, 10087,
+            Intent(context, MainActivity::class.java)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_BACKUP)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Await 自动备份未成功")
+            .setContentText(reason)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$reason\n可进入「备份与恢复」检查 WebDAV 配置。"))
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        NotificationManagerCompat.from(context).notify(10087, notification)
     }
 
     /**

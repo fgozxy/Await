@@ -68,6 +68,9 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         return if (count > 0) count else -1
     }
 
+    /** 外部（导入 / 云端恢复）直接改动了存储后，用它把列表刷成最新 */
+    fun reload() = refresh()
+
     private fun refresh() {
         _events.value = EventStore.load(getApplication()).sortedWithDefault()
     }

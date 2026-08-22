@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Label
@@ -38,7 +39,9 @@ import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.theme.EventColors
 import io.github.fgozxy.await.update.UpdateManager
 import io.github.fgozxy.await.vm.EventViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.io.File
 import java.time.LocalDate
 import android.widget.Toast
 
@@ -68,7 +71,14 @@ fun HomeScreen(
     val curVersion = remember { UpdateManager.currentVersion(context) }
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<UpdateManager.UpdateInfo?>(null) }
-    var downloadProgress by remember { mutableStateOf(-1) } // -1=未在下载，0~99=下载中，100=完成
+    // 下载状态：downloading=是否在下载中；progress 为 0~99，-1 表示服务器没给总长度
+    var downloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableStateOf(0) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
+
+    // 备份与恢复
+    var showBackup by remember { mutableStateOf(false) }
 
     // 分组管理
     var showManageGroups by remember { mutableStateOf(false) }
@@ -149,6 +159,11 @@ fun HomeScreen(
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.SystemUpdateAlt, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("备份与恢复") },
+                            onClick = { menuOpen = false; showBackup = true },
+                            leadingIcon = { Icon(Icons.Default.CloudSync, null) }
                         )
                         DropdownMenuItem(
                             text = { Text("管理分组") },
@@ -312,12 +327,25 @@ fun HomeScreen(
         )
     }
 
+    // ── 备份与恢复 ──
+    if (showBackup) {
+        BackupScreen(viewModel = viewModel, onDismiss = { showBackup = false })
+    }
+
     // ── 应用内更新对话框 ──
     updateInfo?.let { info ->
-        val downloading = downloadProgress in 0 until 100
-        val done = downloadProgress == 100
+        val ready = downloadedApk != null && !downloading
+
+        fun closeUpdate() {
+            downloadJob?.cancel()
+            downloadJob = null
+            downloading = false
+            downloadedApk = null
+            updateInfo = null
+        }
+
         AlertDialog(
-            onDismissRequest = { if (!downloading) updateInfo = null },
+            onDismissRequest = { if (!downloading) closeUpdate() },
             title = { Text("发现新版本 ${info.versionName}") },
             text = {
                 Column {
@@ -327,20 +355,32 @@ fun HomeScreen(
                         maxLines = 10,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (downloadProgress >= 0) {
-                        Spacer(Modifier.height(12.dp))
-                        LinearProgressIndicator(
-                            progress = { (downloadProgress / 100f).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
+                    if (info.sizeText().isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "安装包大小：${info.sizeText()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    if (downloading) {
+                        Spacer(Modifier.height(12.dp))
+                        if (downloadProgress >= 0) {
+                            LinearProgressIndicator(
+                                progress = { (downloadProgress / 100f).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            when {
-                                done -> "下载完成，正在拉起安装器…"
-                                else -> "下载中 $downloadProgress%"
-                            },
+                            if (downloadProgress >= 0) "下载中 $downloadProgress%" else "下载中…",
                             style = MaterialTheme.typography.labelSmall
                         )
+                    } else if (ready) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("下载完成，点「安装」继续", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             },
@@ -353,25 +393,42 @@ fun HomeScreen(
                             UpdateManager.gotoInstallPermission(context)
                             return@TextButton
                         }
-                        scope.launch {
-                            downloadProgress = 0
-                            val r = UpdateManager.downloadApk(context, info) { p -> downloadProgress = p }
-                            r.onSuccess { uri ->
-                                updateInfo = null
-                                downloadProgress = -1
-                                UpdateManager.installApk(context, uri)
+                        val apk = downloadedApk
+                        if (apk != null) {
+                            UpdateManager.installApk(context, apk)
+                            return@TextButton
+                        }
+                        downloading = true
+                        downloadProgress = 0
+                        downloadJob = scope.launch {
+                            val r = UpdateManager.downloadApk(context, info) { p ->
+                                downloadProgress = p
+                            }
+                            downloading = false
+                            downloadJob = null
+                            r.onSuccess { file ->
+                                downloadedApk = file
+                                if (UpdateManager.installApk(context, file)) closeUpdate()
                             }.onFailure {
-                                downloadProgress = -1
                                 Toast.makeText(context, "下载失败：${it.message}", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
                 ) {
-                    Text(if (done) "安装" else if (downloading) "下载中…" else "下载并安装")
+                    Text(if (ready) "安装" else "下载并安装")
                 }
             },
             dismissButton = {
-                TextButton(enabled = !downloading, onClick = { updateInfo = null }) { Text("以后再说") }
+                TextButton(onClick = {
+                    if (downloading) {
+                        // 取消只中断下载，对话框留着，可以直接重试
+                        downloadJob?.cancel()
+                        downloadJob = null
+                        downloading = false
+                    } else closeUpdate()
+                }) {
+                    Text(if (downloading) "取消下载" else "以后再说")
+                }
             }
         )
     }
