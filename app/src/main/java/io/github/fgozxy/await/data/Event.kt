@@ -1,7 +1,10 @@
 package io.github.fgozxy.await.data
 
 import android.content.Context
+import com.google.gson.ExclusionStrategy
+import com.google.gson.FieldAttributes
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -47,8 +50,15 @@ data class Event(
     /** 自定义分组名（如「订阅」「生日」），null/空串表示未分组 */
     val groupName: String? = null
 ) {
-    /** 当前循环配置（每次访问即时解析，兼容三代数据格式） */
-    val repeat: Repeat by lazy { parseRepeat(repeatSpec, repeatCycle, repeatEveryDays, repeatYearly) }
+    /**
+     * 当前循环配置（每次访问即时解析，兼容三代数据格式）。
+     *
+     * 注意：这里刻意用计算属性而不是 `by lazy`——委托会生成一个 `repeat$delegate` 字段，
+     * Gson 会把它一起序列化进存储，再读回来时因其声明类型是接口 `kotlin.Lazy` 而
+     * 抛 JsonIOException，导致整份数据解析失败（v1.2.0 的「保存不上」就是这么来的）。
+     * 解析本身只是拆一个短字符串，开销可以忽略。
+     */
+    val repeat: Repeat get() = parseRepeat(repeatSpec, repeatCycle, repeatEveryDays, repeatYearly)
 
     val cycle: Cycle get() = repeat.cycle
     val repeatN: Int get() = repeat.n
@@ -109,9 +119,6 @@ data class Event(
         }
     }
 
-    override fun equals(other: Any?): Boolean = other is Event && other.id == id
-    override fun hashCode(): Int = id.hashCode()
-
     companion object {
         /** 解析存储的循环配置；任何异常数据一律安全回退为「不重复」 */
         fun parseRepeat(spec: String?, legacyCycle: String?, legacyDays: Int, legacyYearly: Boolean): Repeat {
@@ -147,15 +154,34 @@ data class Event(
 object EventStore {
     private const val PREFS = "await_events"
     private const val KEY = "events_json"
-    private val gson = Gson()
+    /** 解析失败时留存的原始数据，避免被后续保存直接覆盖掉 */
+    private const val KEY_SALVAGE = "events_json_unreadable"
+
+    /**
+     * 排除名字含 `$` 的字段：Kotlin 的委托属性（`by lazy` 等）会生成
+     * `xxx$delegate` 合成字段，写进 JSON 后再读回来会让整份数据解析失败。
+     */
+    private val gson: Gson = GsonBuilder()
+        .setExclusionStrategies(object : ExclusionStrategy {
+            override fun shouldSkipField(f: FieldAttributes) = f.name.contains('$')
+            override fun shouldSkipClass(clazz: Class<*>) = false
+        })
+        .create()
 
     fun load(context: Context): MutableList<Event> {
-        val json = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY, null) ?: return mutableListOf()
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val json = sp.getString(KEY, null) ?: return mutableListOf()
         val list = runCatching {
             val type = object : TypeToken<MutableList<Event>>() {}.type
             gson.fromJson<MutableList<Event>>(json, type)
-        }.getOrNull() ?: mutableListOf()
+        }.getOrNull()
+        if (list == null) {
+            // 解析不了就先把原文留一份：下一次保存会覆盖 KEY，留档才有机会人工找回
+            if (sp.getString(KEY_SALVAGE, null) == null) {
+                sp.edit().putString(KEY_SALVAGE, json).apply()
+            }
+            return mutableListOf()
+        }
         // 清掉无法解析的坏数据，防止崩溃
         list.removeAll { it == null || it.title.isNullOrBlank() }
         return list
