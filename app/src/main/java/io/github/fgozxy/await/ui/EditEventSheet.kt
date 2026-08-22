@@ -37,6 +37,7 @@ private val GROUP_PRESETS = listOf("订阅", "生日", "纪念日", "工作", "�
 @Composable
 fun EditEventSheet(
     initial: Event?,
+    availableGroups: List<String> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (Event) -> Unit,
     onDelete: () -> Unit
@@ -122,9 +123,12 @@ fun EditEventSheet(
                 )
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GROUP_PRESETS.forEach { preset ->
+                    // 已有分组优先展示（含用户自建的「服务器」「话费」等），再补充预设
+                    (availableGroups + GROUP_PRESETS).distinct().forEach { preset ->
                         AssistChip(
-                            onClick = { group = preset },
+                            onClick = {
+                                group = if (group == preset) "" else preset
+                            },
                             label = { Text(preset) }
                         )
                     }

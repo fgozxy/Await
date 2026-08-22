@@ -206,15 +206,19 @@ fun HomeScreen(
     }
 
     if (creating || editing != null) {
-        EditEventSheet(
-            initial = editing,
-            onDismiss = { creating = false; editing = null },
-            onSave = { viewModel.upsert(it); creating = false; editing = null },
-            onDelete = {
-                editing?.let { viewModel.delete(it.id) }
-                creating = false; editing = null
-            }
-        )
+        // key 保证切换/重开日程时表单状态完全重建，避免残留上一次的输入
+        key(editing?.id, creating) {
+            EditEventSheet(
+                initial = editing,
+                availableGroups = existingGroups,
+                onDismiss = { creating = false; editing = null },
+                onSave = { viewModel.upsert(it); creating = false; editing = null },
+                onDelete = {
+                    editing?.let { viewModel.delete(it.id) }
+                    creating = false; editing = null
+                }
+            )
+        }
     }
 
     deleting?.let { target ->
