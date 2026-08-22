@@ -256,9 +256,15 @@ object WebDavClient {
     /**
      * Android 的 HttpURLConnection（OkHttp 实现）允许 PROPFIND/MKCOL；
      * 万一某些 ROM 换成了严格的 JDK 实现，就反射改写 method 字段兜底。
+     *
+     * 注意两点，都是踩过的坑：
+     *  - HTTPS 的连接对象是个包装类，真正发请求的是内部的 delegate。只改外层对象会「设置成功」，
+     *    但请求仍以 GET 发出——静默用错方法比直接报错更难查，所以每个目标都要写，不能提前返回。
+     *  - 写完必须回读 requestMethod 确认，确认不了就明确报错。
      */
     private fun HttpURLConnection.setMethodCompat(method: String) {
         if (runCatching { requestMethod = method }.isSuccess) return
+
         val targets = mutableListOf<Any>(this)
         runCatching {
             javaClass.getDeclaredField("delegate")
@@ -270,14 +276,15 @@ object WebDavClient {
             var c: Class<*>? = target.javaClass
             while (c != null) {
                 val cls = c
-                val ok = runCatching {
+                runCatching {
                     cls.getDeclaredField("method").apply { isAccessible = true }.set(target, method)
-                }.isSuccess
-                if (ok) return
+                }
                 c = cls.superclass
             }
         }
-        error("当前系统不支持 WebDAV 的 $method 方法")
+        if (!method.equals(requestMethod, ignoreCase = true)) {
+            error("当前系统不支持 WebDAV 的 $method 方法")
+        }
     }
 
     /** 路径分段编码：空格转 %20 而非 +，斜杠保留为分隔符 */
