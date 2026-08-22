@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
 import java.time.LocalDate
@@ -17,7 +18,7 @@ import java.time.ZoneId
  * 策略：
  *  - 使用 setExactAndAllowWhileIdle 保证提醒准时（低电耗模式下也可触发）
  *  - Android 12+ 若用户未授予「闹钟和提醒」权限，则降级为窗口闹钟，并在 UI 上引导授权
- *  - 每次触发后自动滚动到该日程的下一个提醒点（支持每年重复）
+ *  - 每次触发后自动滚动到该日程的下一个提醒点（支持每天/每周/每月/每年循环）
  *  - 设备重启后由 BootReceiver 调用 [scheduleAll] 恢复全部闹钟
  */
 object AlarmScheduler {
@@ -27,16 +28,16 @@ object AlarmScheduler {
         val offsets = event.remindDaysBefore.distinct().sorted()
         if (offsets.isEmpty()) return null
 
-        var candidate = event.nextOccurrence()
-        // 最多向后扫描 6 年，防止异常数据导致死循环
-        repeat(6) {
+        var candidate = event.date
+        // 循环事件逐周期向后扫描；上限保护防止异常数据死循环
+        repeat(3650) {
             for (offset in offsets) {
                 val trigger = candidate.minusDays(offset.toLong())
                     .atTime(event.remindHour, event.remindMinute)
                 if (trigger.isAfter(from)) return trigger
             }
-            if (!event.repeatYearly) return null
-            candidate = candidate.plusYears(1)
+            if (event.cycle == Cycle.NONE) return null
+            candidate = event.cycle.advance(candidate)
         }
         return null
     }

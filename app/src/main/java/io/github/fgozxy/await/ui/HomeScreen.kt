@@ -247,8 +247,12 @@ private fun EventCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        if (event.repeatYearly) {
-                            Text("  ↻每年", fontSize = 11.sp, color = accent)
+                        if (event.cycle != io.github.fgozxy.await.data.Cycle.NONE) {
+                            Text(
+                                "  ↻${event.cycle.label}",
+                                fontSize = 11.sp,
+                                color = accent
+                            )
                         }
                     }
                     Spacer(Modifier.height(4.dp))

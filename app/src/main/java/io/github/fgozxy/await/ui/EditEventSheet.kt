@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.theme.EventColors
 import java.time.Instant
@@ -39,7 +40,7 @@ fun EditEventSheet(
     var note by remember { mutableStateOf(initial?.note ?: "") }
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
-    var repeatYearly by remember { mutableStateOf(initial?.repeatYearly ?: false) }
+    var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
     var colorIndex by remember { mutableIntStateOf(initial?.colorIndex ?: 0) }
     var remindDays by remember {
         mutableStateOf(initial?.remindDaysBefore?.toSet() ?: setOf(1))
@@ -124,7 +125,29 @@ fun EditEventSheet(
 
             // 开关项
             ToggleRow("置顶显示", pinned) { pinned = it }
-            ToggleRow("每年重复（生日 / 纪念日）", repeatYearly) { repeatYearly = it }
+
+            // 循环周期选择（订阅缴费、房租、会员到期等）
+            Column {
+                Text("循环周期", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Cycle.entries.forEach { c ->
+                        FilterChip(
+                            selected = cycle == c,
+                            onClick = { cycle = c },
+                            label = { Text(c.label) }
+                        )
+                    }
+                }
+                if (cycle != Cycle.NONE) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "倒计时和提醒将随周期自动滚动，无需手动更新",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
             // 提醒设置
             Column {
@@ -188,7 +211,8 @@ fun EditEventSheet(
                                 remindDaysBefore = (remindDays.ifEmpty { setOf(1) }).toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
-                                repeatYearly = repeatYearly
+                                repeatCycle = cycle,
+                                repeatYearly = false
                             )
                         )
                     },
