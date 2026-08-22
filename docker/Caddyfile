@@ -1,0 +1,15 @@
+# Caddy 会自动为该域名申请并续期 Let's Encrypt 证书
+# 前提：域名 A 记录已指向本机，且 80 / 443 端口对公网开放
+{$AWAIT_DOMAIN} {
+	tls {$AWAIT_TLS_EMAIL}
+
+	# 备份文件很小，但给足余量
+	request_body {
+		max_size 64MB
+	}
+
+	reverse_proxy webdav:80 {
+		# 让 Apache 日志里记到真实来源 IP
+		header_up X-Forwarded-For {remote_host}
+	}
+}

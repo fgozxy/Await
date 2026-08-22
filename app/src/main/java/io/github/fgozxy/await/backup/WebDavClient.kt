@@ -6,6 +6,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -52,6 +53,10 @@ object WebDavClient {
 
     private val HTTP_DATE = DateTimeFormatter.ofPattern("d MMM yyyy HH:mm:ss zzz", Locale.US)
 
+    /** 备份快照的文件名格式：Await-backup-20260822-100000.json */
+    private val NAME_STAMP = Regex("Await-backup-(\\d{8}-\\d{6})\\.json", RegexOption.IGNORE_CASE)
+    private val NAME_STAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+
     private const val CONNECT_TIMEOUT = 15_000
     private const val READ_TIMEOUT = 30_000
 
@@ -77,6 +82,22 @@ object WebDavClient {
             }.recoverCatching {
                 Instant.parse(raw).toEpochMilli()   // 少数服务器返回 ISO-8601
             }.getOrDefault(0L)
+        }
+
+        /**
+         * 排序用的时间：优先取文件名里我们自己写入的时间戳（Await-backup-yyyyMMdd-HHmmss.json），
+         * 它由本机生成、精确且一定存在；其次才用服务器的修改时间——有的服务器根本不返回
+         * getlastmodified，那时若只按文件名排序，目录里的其他文件会盖在最新备份上面。
+         */
+        fun backupTimeMillis(): Long {
+            val stamp = NAME_STAMP.find(name)?.groupValues?.get(1)
+            if (stamp != null) {
+                runCatching {
+                    return LocalDateTime.parse(stamp, NAME_STAMP_FORMAT)
+                        .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                }
+            }
+            return modifiedAtMillis()
         }
 
         /** 「2026-08-22 18:00」；无法解析时原样返回服务器给的字符串 */
@@ -177,10 +198,9 @@ object WebDavClient {
         } finally {
             conn.disconnect()
         }
-        // 先按服务器给的修改时间排，缺失时退回按文件名（我们的命名本身含时间戳）
         parseListing(body)
             .filter { it.name.endsWith(".json", true) }
-            .sortedWith(compareByDescending<Entry> { it.modifiedAtMillis() }.thenByDescending { it.name })
+            .sortedWith(compareByDescending<Entry> { it.backupTimeMillis() }.thenByDescending { it.name })
     }
 
     /** 解析 multistatus XML：逐个 <response> 取出 href / getlastmodified / getcontentlength */

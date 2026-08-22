@@ -1,0 +1,54 @@
+# Await 自建 WebDAV 备份盘
+#
+#   docker compose up -d                     仅 WebDAV（HTTP，需自备 TLS 或仅内网使用）
+#   docker compose --profile https up -d     WebDAV + Caddy 自动申请 Let's Encrypt 证书
+#
+# ⚠️ Android 默认禁止明文 HTTP，Await 必须通过 https:// 连接，详见 README。
+
+services:
+  webdav:
+    build: .
+    image: await-webdav:latest
+    container_name: await-webdav
+    restart: unless-stopped
+    environment:
+      WEBDAV_USER: ${WEBDAV_USER:?请在 .env 中设置 WEBDAV_USER}
+      WEBDAV_PASSWORD: ${WEBDAV_PASSWORD:?请在 .env 中设置 WEBDAV_PASSWORD}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 备份就存在宿主机的这个目录里，直接 cp / rsync 就能再备一份
+      - ${WEBDAV_DATA:-./data}:/data
+    ports:
+      # 用 https profile 时建议把 WEBDAV_BIND 设为 127.0.0.1，只让 Caddy 能访问
+      - "${WEBDAV_BIND:-0.0.0.0}:${WEBDAV_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u \"$$WEBDAV_USER:$$WEBDAV_PASSWORD\" -X PROPFIND -H 'Depth: 0' http://localhost/ -o /dev/null"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: await-caddy
+    restart: unless-stopped
+    profiles: ["https"]
+    depends_on:
+      - webdav
+    environment:
+      AWAIT_DOMAIN: ${AWAIT_DOMAIN:?使用 https profile 时必须设置 AWAIT_DOMAIN}
+      AWAIT_TLS_EMAIL: ${AWAIT_TLS_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -37,6 +37,11 @@
 - 检查 GitHub Release → 下载 → 拉起系统安装器，全程可取消
 - 下载全程有超时与完整性校验，不会卡在「下载中」；安装包经 FileProvider 授权给系统安装器
 
+### 🐳 自建 WebDAV（可选）
+不想把备份放在第三方网盘的，`docker/` 目录里有一套开箱即用的自建方案：一条
+`docker compose --profile https up -d` 起一个 Apache `mod_dav` 服务，Caddy 自动签发
+Let's Encrypt 证书，备份直接落在自己 VPS 的磁盘上。详见 [docker/README.md](docker/README.md)。
+
 ## 🛠 技术栈
 
 | 项目 | 选型 |
