@@ -188,12 +188,13 @@ fun EditEventSheet(
                     )
                 }
 
-                // 间隔数调节器（年固定为每 1 年，不显示）
-                if (cycle != Cycle.NONE && cycle != Cycle.YEAR) {
+                // 间隔数调节器
+                if (cycle != Cycle.NONE) {
                     val presets = when (cycle) {
-                        Cycle.WEEK -> listOf(2, 4)
-                        Cycle.MONTH -> listOf(2, 3, 6)
-                        else -> listOf(7, 14, 30, 90)
+                        Cycle.WEEK -> listOf(1, 2, 4)
+                        Cycle.MONTH -> listOf(1, 2, 3, 6)
+                        Cycle.YEAR -> listOf(1, 2, 4, 10)
+                        else -> listOf(1, 7, 14, 30, 90)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(

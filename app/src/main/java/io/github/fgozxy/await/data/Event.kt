@@ -86,12 +86,11 @@ data class Event(
         return "%04d-%02d-%02d".format(d.year, d.monthValue, d.dayOfMonth)
     }
 
-    /** 循环徽标文本；不重复返回 null。如「↻每月」「↻每2周」「↻每45天」 */
+    /** 循环徽标文本；不重复返回 null。如「↻每月」「↻每2周」「↻每45天」「↻每4年」 */
     fun cycleLabel(): String? {
         val r = repeat
         return when {
             r.cycle == Cycle.NONE -> null
-            r.cycle == Cycle.YEAR -> "↻每年"
             r.n <= 1 -> "↻每${r.cycle.unit}"
             else -> "↻每${r.n}${r.cycle.unit}"
         }
@@ -105,7 +104,7 @@ data class Event(
             Cycle.DAY -> d.plusDays(n)
             Cycle.WEEK -> d.plusWeeks(n)
             Cycle.MONTH -> d.plusMonths(n)
-            Cycle.YEAR -> d.plusYears(1)
+            Cycle.YEAR -> d.plusYears(n)
             Cycle.NONE -> d
         }
     }
