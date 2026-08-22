@@ -47,10 +47,11 @@ fun EditEventSheet(
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
     var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
-    var group by remember { mutableStateOf(initial?.group ?: "") }
-    var everyDays by remember {
-        mutableIntStateOf(initial?.repeatEveryDays?.takeIf { it > 0 } ?: 30)
+    // 循环间隔数：每天/每周/每月时 N=1 表示「每」；N>1 表示「每隔N个单位」
+    var repN by remember {
+        mutableIntStateOf(initial?.repeatN?.takeIf { it > 1 } ?: 1)
     }
+    var group by remember { mutableStateOf(initial?.group ?: "") }
     var colorIndex by remember { mutableIntStateOf(initial?.colorIndex ?: 0) }
     var remindDays by remember {
         // 默认「当天 + 提前1天」都提醒，避免只提前1天而日程就在今天时错过提醒
@@ -165,17 +166,16 @@ fun EditEventSheet(
             Column {
                 Text("循环周期", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(8.dp))
+                // 单位选择：不重复 / 天 / 周 / 月 / 年
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Cycle.entries.forEach { c ->
                         FilterChip(
                             selected = cycle == c,
-                            onClick = { cycle = c },
-                            label = {
-                                Text(
-                                    if (c == Cycle.EVERY_N_DAYS && everyDays > 0)
-                                        "每隔${everyDays}天" else c.label
-                                )
-                            }
+                            onClick = {
+                                cycle = c
+                                if (c != Cycle.DAY && repN < 1) repN = 1
+                            },
+                            label = { Text(c.label.removePrefix("按").removeSuffix("循环")) }
                         )
                     }
                 }
@@ -187,30 +187,38 @@ fun EditEventSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // 「每隔 N 天」自定义天数调节器
-                if (cycle == Cycle.EVERY_N_DAYS) {
+
+                // 间隔数调节器（年固定为每 1 年，不显示）
+                if (cycle != Cycle.NONE && cycle != Cycle.YEAR) {
+                    val presets = when (cycle) {
+                        Cycle.WEEK -> listOf(2, 4)
+                        Cycle.MONTH -> listOf(2, 3, 6)
+                        else -> listOf(7, 14, 30, 90)
+                    }
                     Spacer(Modifier.height(8.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        OutlinedIconButton(onClick = { if (everyDays > 1) everyDays-- }) {
+                        OutlinedIconButton(onClick = { if (repN > 1) repN-- }) {
                             Icon(Icons.Default.Remove, "减少")
                         }
                         Text(
-                            "$everyDays 天",
+                            "每 $repN ${cycle.unit}",
                             style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.widthIn(min = 72.dp),
+                            modifier = Modifier.widthIn(min = 96.dp),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        OutlinedIconButton(onClick = { if (everyDays < 3650) everyDays++ }) {
+                        OutlinedIconButton(onClick = { if (repN < 3650) repN++ }) {
                             Icon(Icons.Default.Add, "增加")
                         }
-                        Spacer(Modifier.width(4.dp))
-                        listOf(14, 30, 60, 90).forEach { preset ->
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        presets.forEach { preset ->
                             AssistChip(
-                                onClick = { everyDays = preset },
-                                label = { Text("$preset") }
+                                onClick = { repN = preset },
+                                label = { Text(if (preset == 1) "每${cycle.unit}" else "每$preset${cycle.unit}") }
                             )
                         }
                     }
@@ -279,9 +287,7 @@ fun EditEventSheet(
                                 remindDaysBefore = (remindDays.ifEmpty { setOf(0) }).toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
-                                repeatCycle = cycle.name,
-                                repeatEveryDays = if (cycle == Cycle.EVERY_N_DAYS) everyDays else 0,
-                                repeatYearly = false,
+                                repeatSpec = if (cycle == Cycle.NONE) null else "${cycle.name}:$repN",
                                 groupName = group.trim()
                             )
                         )
