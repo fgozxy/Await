@@ -8,7 +8,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +43,9 @@ fun EditEventSheet(
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
     var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
+    var everyDays by remember {
+        mutableIntStateOf(initial?.repeatEveryDays?.takeIf { it > 0 } ?: 30)
+    }
     var colorIndex by remember { mutableIntStateOf(initial?.colorIndex ?: 0) }
     var remindDays by remember {
         mutableStateOf(initial?.remindDaysBefore?.toSet() ?: setOf(1))
@@ -135,7 +140,12 @@ fun EditEventSheet(
                         FilterChip(
                             selected = cycle == c,
                             onClick = { cycle = c },
-                            label = { Text(c.label) }
+                            label = {
+                                Text(
+                                    if (c == Cycle.EVERY_N_DAYS && everyDays > 0)
+                                        "每隔${everyDays}天" else c.label
+                                )
+                            }
                         )
                     }
                 }
@@ -146,6 +156,34 @@ fun EditEventSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                // 「每隔 N 天」自定义天数调节器
+                if (cycle == Cycle.EVERY_N_DAYS) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedIconButton(onClick = { if (everyDays > 1) everyDays-- }) {
+                            Icon(Icons.Default.Remove, "减少")
+                        }
+                        Text(
+                            "$everyDays 天",
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.widthIn(min = 72.dp),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        OutlinedIconButton(onClick = { if (everyDays < 3650) everyDays++ }) {
+                            Icon(Icons.Default.Add, "增加")
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        listOf(14, 30, 60, 90).forEach { preset ->
+                            AssistChip(
+                                onClick = { everyDays = preset },
+                                label = { Text("$preset") }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -212,6 +250,7 @@ fun EditEventSheet(
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
                                 repeatCycle = cycle,
+                                repeatEveryDays = if (cycle == Cycle.EVERY_N_DAYS) everyDays else 0,
                                 repeatYearly = false
                             )
                         )

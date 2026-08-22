@@ -247,12 +247,8 @@ private fun EventCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        if (event.cycle != io.github.fgozxy.await.data.Cycle.NONE) {
-                            Text(
-                                "  ↻${event.cycle.label}",
-                                fontSize = 11.sp,
-                                color = accent
-                            )
+                        event.cycleLabel()?.let { label ->
+                            Text("  $label", fontSize = 11.sp, color = accent)
                         }
                     }
                     Spacer(Modifier.height(4.dp))

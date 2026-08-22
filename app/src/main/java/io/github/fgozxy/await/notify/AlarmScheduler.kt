@@ -37,7 +37,7 @@ object AlarmScheduler {
                 if (trigger.isAfter(from)) return trigger
             }
             if (event.cycle == Cycle.NONE) return null
-            candidate = event.cycle.advance(candidate)
+            candidate = event.advanceDate(candidate)
         }
         return null
     }

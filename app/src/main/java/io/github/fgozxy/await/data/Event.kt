@@ -12,15 +12,17 @@ enum class Cycle(val label: String) {
     DAILY("每天"),
     WEEKLY("每周"),
     MONTHLY("每月"),
-    YEARLY("每年");
+    YEARLY("每年"),
+    /** 自定义：每隔 N 天循环（N 存在 Event.repeatEveryDays 中） */
+    EVERY_N_DAYS("每隔N天");
 
-    /** 从指定日期推进一个周期 */
+    /** 从指定日期推进一个标准周期 */
     fun advance(d: LocalDate): LocalDate = when (this) {
         DAILY -> d.plusDays(1)
         WEEKLY -> d.plusWeeks(1)
         MONTHLY -> d.plusMonths(1)
         YEARLY -> d.plusYears(1)
-        NONE -> d
+        else -> d
     }
 }
 
@@ -44,11 +46,28 @@ data class Event(
     val remindHour: Int = 9,
     val remindMinute: Int = 0,
     val repeatCycle: Cycle = Cycle.NONE,
+    val repeatEveryDays: Int = 0,
     val repeatYearly: Boolean = false
 ) {
     /** 实际生效的循环周期（兼容旧数据的归一化结果） */
     val cycle: Cycle
         get() = if (repeatCycle == Cycle.NONE && repeatYearly) Cycle.YEARLY else repeatCycle
+
+    /** 自定义循环的天数（1~3650，仅 EVERY_N_DAYS 时使用） */
+    val everyDays: Int get() = repeatEveryDays.coerceIn(1, 3650)
+
+    /** 循环徽标文本；不重复返回 null */
+    fun cycleLabel(): String? = when {
+        cycle == Cycle.NONE -> null
+        cycle == Cycle.EVERY_N_DAYS -> "↻每${everyDays}天"
+        else -> "↻${cycle.label}"
+    }
+
+    /** 按当前循环配置，从指定日期推进到下一周期 */
+    fun advanceDate(d: LocalDate): LocalDate = when (cycle) {
+        Cycle.EVERY_N_DAYS -> d.plusDays(everyDays.toLong())
+        else -> cycle.advance(d)
+    }
 
     /** 目标日期 */
     val date: LocalDate get() = LocalDate.ofEpochDay(dateEpochDay)
@@ -66,7 +85,7 @@ data class Event(
         // 上限保护：最多推进 3650 个周期（约 10 年）
         repeat(3650) {
             if (ChronoUnit.DAYS.between(today, d) >= 0) return d
-            d = cycle.advance(d)
+            d = advanceDate(d)
         }
         return d
     }
