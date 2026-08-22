@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import io.github.fgozxy.await.MainActivity
+import io.github.fgozxy.await.ReminderActivity
 import io.github.fgozxy.await.R
 import io.github.fgozxy.await.data.Event
 
@@ -61,12 +62,13 @@ object NotificationHelper {
         val text = "${event.dateText()} · $whenText" +
             (if (event.note.isNotBlank()) "\n${event.note}" else "")
 
-        val contentIntent = PendingIntent.getActivity(
+        // 全屏意图：触发时直接弹出应用内的全屏提醒页（锁屏也显示）
+        val fullScreenPi = PendingIntent.getActivity(
             context,
-            event.id.toInt(),
-            Intent(context, MainActivity::class.java)
-                .putExtra(MainActivity.EXTRA_EVENT_ID, event.id)
-                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            (event.id % Int.MAX_VALUE).toInt() + 1_000_000,
+            Intent(context, ReminderActivity::class.java)
+                .putExtra(ReminderActivity.EXTRA_EVENT_ID, event.id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -75,10 +77,11 @@ object NotificationHelper {
             .setContentTitle("⏳ ${event.title}")
             .setContentText("$whenText（${event.dateText()}）")
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(contentIntent)
+            .setContentIntent(fullScreenPi)            // 点通知 → 直接进入全屏提醒页
+            .setFullScreenIntent(fullScreenPi, true)   // 锁屏/后台 → 全屏弹出
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_EVENT)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .build()
 
         NotificationManagerCompat.from(context).notify(event.id.toInt(), notification)
