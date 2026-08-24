@@ -14,12 +14,17 @@
 - 日程备注、标记颜色、置顶
 - 循环周期：按天 / 周 / 月 / 年，支持「每隔 N 个单位」
 - 分组浏览：置顶 / 今天 / 即将到来 / 已经过去
+- **分组批量管理**：多选 / 全选删除分组，可选择「仅移出分组」或「连同日程一起删除」，默认分组（未分组）同样可清空
 - 全文搜索
 
 ### 🔔 强大的通知功能
+- **闹钟式提醒**：到点持续响铃 + 震动，不手动关闭就一直响；走闹钟音量通道，静音模式下照响
+- **稍后提醒**：全屏提醒页与通知栏都有「稍后提醒」，10 分钟后再响一次
+- **自动静音**：无人理会时 5 分钟后自动停止响铃，只留一条普通通知，不会响一整天也不耗电
+- **逐条开关**：每条日程可单独决定用闹钟式提醒还是普通通知
 - **多级提前提醒**：当天、提前 1 / 3 / 7 / 15 / 30 天自由组合（多选）
 - **自定义提醒时刻**：精确到分钟的触发时间
-- **精确闹钟**：基于 `AlarmManager.setExactAndAllowWhileIdle`，低电耗模式下依然准时
+- **精确闹钟**：闹钟式日程用 `AlarmManager.setAlarmClock`（完全豁免低电耗模式），普通提醒用 `setExactAndAllowWhileIdle`
 - **开机自动恢复**：重启后所有提醒自动重新调度
 - **升级自动恢复**：应用更新后提醒不丢失
 - **独立通知渠道**：「日程提醒」「每日汇总」可分别管理重要级别
@@ -50,7 +55,7 @@ Let's Encrypt 证书，备份直接落在自己 VPS 的磁盘上。详见 [docke
 | UI | Jetpack Compose + Material 3（支持动态取色） |
 | 架构 | MVVM（ViewModel + StateFlow） |
 | 存储 | Gson + SharedPreferences（轻量数据） |
-| 提醒 | AlarmManager 精确闹钟 + BroadcastReceiver |
+| 提醒 | AlarmManager 精确闹钟 + BroadcastReceiver + 前台服务响铃 |
 | 备份 | 自研极简 WebDAV 客户端（HttpURLConnection，零依赖） |
 | 更新 | GitHub Releases API + FileProvider 安装 |
 

@@ -32,7 +32,7 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         val list = EventStore.load(ctx)
         list.removeAll { it.id == eventId }
         EventStore.save(ctx, list)
-        AlarmScheduler.cancel(ctx, eventId)
+        cancelAlarms(eventId)
         refresh()
     }
 
@@ -48,15 +48,33 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 删除指定分组：该分组下所有日程移出分组（变回未分组），日程本身保留。
-     * 返回受影响的日程数；分组不存在返回 -1。
+     * 批量删除分组。
+     *
+     * @param names 要删除的分组名；空串 `""` 代表「未分组」这个默认分组
+     * @param deleteEvents true = 连同分组下的日程一起删除，并取消它们的闹钟；
+     *                     false = 仅把日程移出分组、日程本身保留
+     *                     （此时空串是空操作——未分组的日程没有分组可移出）
+     * @return 受影响的日程条数
      */
-    fun deleteGroup(groupName: String): Int {
+    fun deleteGroups(names: Set<String>, deleteEvents: Boolean): Int {
+        if (names.isEmpty()) return 0
         val ctx = getApplication<Application>()
         val list = EventStore.load(ctx)
+
+        if (deleteEvents) {
+            val doomed = list.filter { it.group in names }
+            if (doomed.isEmpty()) return 0
+            list.removeAll(doomed.toSet())
+            EventStore.save(ctx, list)
+            doomed.forEach { cancelAlarms(it.id) }
+            refresh()
+            return doomed.size
+        }
+
         var count = 0
         for (i in list.indices) {
-            if (list[i].group == groupName) {
+            // 未分组（空串）本来就没有分组可移出，跳过
+            if (list[i].group.isNotBlank() && list[i].group in names) {
                 list[i] = list[i].copy(groupName = "")
                 count++
             }
@@ -65,7 +83,14 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
             EventStore.save(ctx, list)
             refresh()
         }
-        return if (count > 0) count else -1
+        return count
+    }
+
+    /** 取消一条日程的全部闹钟：周期闹钟 + 可能挂着的「稍后提醒」 */
+    private fun cancelAlarms(eventId: Long) {
+        val ctx = getApplication<Application>()
+        AlarmScheduler.cancel(ctx, eventId)
+        AlarmScheduler.cancelSnooze(ctx, eventId)
     }
 
     /** 外部（导入 / 云端恢复）直接改动了存储后，用它把列表刷成最新 */

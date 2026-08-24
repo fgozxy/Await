@@ -1,6 +1,7 @@
 package io.github.fgozxy.await.notify
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -18,31 +19,44 @@ import io.github.fgozxy.await.data.Event
  * 通知中心：负责渠道管理与所有通知的构建展示。
  *
  * 渠道设计：
- *  - event_reminders : 单条日程的倒计时提醒（高优先级）
- *  - daily_summary   : 每日日程汇总提醒（默认优先级）
+ *  - event_alarm_v1  : 闹钟式提醒（前台服务的常驻通知；声音与震动由服务自己控制）
+ *  - event_reminders : 普通日程提醒（高优先级，系统默认提示音）
  *  - backup          : 定时备份失败提示（低优先级，不打扰）
  */
 object NotificationHelper {
 
     const val CHANNEL_EVENTS = "event_reminders"
-    const val CHANNEL_DAILY = "daily_summary"
     const val CHANNEL_BACKUP = "backup"
+
+    /**
+     * 闹钟渠道。带 `_v1` 后缀是必须的：渠道属性一旦创建就不可再改，
+     * 复用老的 event_reminders 就没法把系统提示音关掉（我们要自己播放循环铃声）。
+     */
+    const val CHANNEL_ALARM = "event_alarm_v1"
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ALARM,
+                "闹钟式提醒",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "到点持续响铃震动，直到手动关闭"
+                // 声音和震动都由 AlarmRingService 自己控制（走闹钟音量通道），
+                // 渠道这边必须关掉，否则会和循环铃声叠在一起。
+                setSound(null, null)
+                enableVibration(false)
+                setBypassDnd(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+        )
         nm.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_EVENTS,
                 "日程倒计时提醒",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply { description = "在日程临近时发送倒计时提醒" }
-        )
-        nm.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_DAILY,
-                "每日汇总提醒",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply { description = "每天固定时间汇总今日与即将到来的日程" }
         )
         nm.createNotificationChannel(
             NotificationChannel(
@@ -96,32 +110,64 @@ object NotificationHelper {
         NotificationManagerCompat.from(context).notify(event.id.toInt(), notification)
     }
 
-    /** 每日汇总通知 */
-    fun showDailySummary(context: Context, todayCount: Int, upcomingCount: Int, nearestTitle: String?, nearestDays: Int?) {
-        if (!canNotify(context)) return
-        if (todayCount == 0 && upcomingCount == 0) return
-        val text = buildString {
-            if (todayCount > 0) append("今天有 $todayCount 个日程")
-            if (nearestTitle != null && nearestDays != null && nearestDays > 0) {
-                if (isNotEmpty()) append("；")
-                append("最近的「$nearestTitle」还有 $nearestDays 天")
-            }
+    /**
+     * 构建闹钟式提醒的常驻通知（由 [AlarmRingService] 作为前台服务通知使用）。
+     *
+     * 与普通提醒的区别：不可划掉、不自动消失、带「稍后提醒 / 关闭」两个按钮，
+     * 且声音震动一律由服务自己播，渠道层面是静音的。
+     */
+    fun buildAlarmNotification(context: Context, event: Event): Notification {
+        val days = event.daysFromToday()
+        val whenText = when {
+            days == 0 -> "就是今天！"
+            days > 0 -> "还有 $days 天"
+            else -> "已过去 ${-days} 天"
         }
-        val contentIntent = PendingIntent.getActivity(
-            context, 10086,
-            Intent(context, MainActivity::class.java)
-                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+
+        val fullScreenPi = PendingIntent.getActivity(
+            context,
+            requestCode(event.id, RC_FULLSCREEN),
+            Intent(context, ReminderActivity::class.java)
+                .putExtra(ReminderActivity.EXTRA_EVENT_ID, event.id)
+                .putExtra(ReminderActivity.EXTRA_ALARM_MODE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = NotificationCompat.Builder(context, CHANNEL_DAILY)
+
+        fun servicePi(action: String, rcSalt: Int) = PendingIntent.getForegroundService(
+            context,
+            requestCode(event.id, rcSalt),
+            Intent(context, AlarmRingService::class.java)
+                .setAction(action)
+                .putExtra(AlarmRingService.EXTRA_EVENT_ID, event.id),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(context, CHANNEL_ALARM)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Await · 今日日程速览")
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(contentIntent)
-            .setAutoCancel(true)
+            .setContentTitle("⏳ ${event.title}")
+            .setContentText("$whenText（${event.dateText()}）")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                "${event.dateText()} · $whenText" +
+                    (if (event.note.isNotBlank()) "\n${event.note}" else "")
+            ))
+            .setContentIntent(fullScreenPi)
+            .setFullScreenIntent(fullScreenPi, true)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)          // 不可划掉：必须点「关闭」或「稍后提醒」
+            .setAutoCancel(false)
+            .setSilent(true)           // 出声的是服务里的 MediaPlayer，不是这条通知
+            .addAction(
+                0, "稍后提醒",
+                servicePi(AlarmRingService.ACTION_SNOOZE, RC_SNOOZE)
+            )
+            .addAction(
+                0, "关闭",
+                servicePi(AlarmRingService.ACTION_STOP, RC_STOP)
+            )
             .build()
-        NotificationManagerCompat.from(context).notify(10086, notification)
     }
 
     /** 定时备份失败提示：只在失败时打扰一次，成功静默 */
@@ -144,6 +190,14 @@ object NotificationHelper {
             .build()
         NotificationManagerCompat.from(context).notify(10087, notification)
     }
+
+    // 同一条日程会同时存在多个 PendingIntent（全屏页 / 稍后提醒 / 关闭），
+    // request code 必须互不相同，否则 FLAG_UPDATE_CURRENT 会让它们互相覆盖。
+    private const val RC_FULLSCREEN = 0x0F0F
+    private const val RC_SNOOZE = 0x5A5A
+    private const val RC_STOP = 0x3C3C
+
+    private fun requestCode(eventId: Long, salt: Int): Int = eventId.toInt() xor salt
 
     /**
      * 立即发送一条测试通知，用于验证通知链路（权限 / 渠道 / 省电策略）是否正常。

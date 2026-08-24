@@ -59,6 +59,8 @@ fun EditEventSheet(
     }
     var remindHour by remember { mutableIntStateOf(initial?.remindHour ?: 9) }
     var remindMinute by remember { mutableIntStateOf(initial?.remindMinute ?: 0) }
+    // 新建日程默认开启闹钟式提醒；老数据（alarmMode 为 null）同样视为开启
+    var alarmMode by remember { mutableStateOf(initial?.isAlarmMode ?: true) }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
@@ -259,6 +261,12 @@ fun EditEventSheet(
                         Text("点击选择", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                ToggleRow(
+                    label = "闹钟式提醒",
+                    checked = alarmMode,
+                    subtitle = "到点持续响铃震动，不手动关闭就一直响"
+                ) { alarmMode = it }
             }
 
             // 操作按钮
@@ -289,7 +297,8 @@ fun EditEventSheet(
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
                                 repeatSpec = if (cycle == Cycle.NONE) null else "${cycle.name}:$repN",
-                                groupName = group.trim()
+                                groupName = group.trim(),
+                                alarmMode = alarmMode
                             )
                         )
                     },
@@ -342,12 +351,26 @@ fun EditEventSheet(
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    subtitle: String? = null,
+    onChange: (Boolean) -> Unit
+) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }

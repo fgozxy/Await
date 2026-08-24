@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.triStateToggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,20 +17,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SystemUpdateAlt
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,6 +57,8 @@ fun HomeScreen(
     onRequestNotif: () -> Unit = {},
     showBattBanner: Boolean = false,
     onRequestBatt: () -> Unit = {},
+    showFullScreenBanner: Boolean = false,
+    onRequestFullScreen: () -> Unit = {},
     onTestNotification: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -80,9 +83,10 @@ fun HomeScreen(
     // 备份与恢复
     var showBackup by remember { mutableStateOf(false) }
 
-    // 分组管理
+    // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
-    var confirmDeleteGroup by remember { mutableStateOf<String?>(null) }
+    var selectedForDelete by remember { mutableStateOf(setOf<String>()) }
+    var confirmDeleteGroups by remember { mutableStateOf<Set<String>?>(null) }
 
     // 分组筛选：null=全部，""=未分组，其他=指定分组名
     var selectedGroup by remember { mutableStateOf<String?>(null) }
@@ -196,6 +200,13 @@ fun HomeScreen(
                     "去授权", onRequestExactAlarm
                 )
             }
+            if (showFullScreenBanner) {
+                HealthBanner(
+                    "未授予全屏提醒权限，闹钟到点可能不会弹出",
+                    "去授权", onRequestFullScreen,
+                    container = MaterialTheme.colorScheme.errorContainer
+                )
+            }
             if (showBattBanner) {
                 HealthBanner(
                     "建议加入电池优化白名单，防止后台提醒被拦截",
@@ -262,41 +273,88 @@ fun HomeScreen(
         )
     }
 
-    // ── 管理分组对话框 ──
+    // ── 管理分组对话框（多选 + 全选）──
     if (showManageGroups) {
-        val groupCounts = events
-            .filter { it.group.isNotBlank() }
-            .groupingBy { it.group }
-            .eachCount()
+        // 分组条目：名称 → 日程数。空串条目代表「未分组」，只在确实有未分组日程时出现
+        val groupEntries = buildList {
+            addAll(
+                events.filter { it.group.isNotBlank() }
+                    .groupingBy { it.group }
+                    .eachCount()
+                    .toList()
+                    .sortedBy { it.first }
+            )
+            if (hasUngrouped) add("" to events.count { it.group.isBlank() })
+        }
+        val allNames = groupEntries.map { it.first }.toSet()
+
+        fun closeManage() {
+            showManageGroups = false
+            selectedForDelete = emptySet()
+        }
+
         AlertDialog(
-            onDismissRequest = { showManageGroups = false },
+            onDismissRequest = { closeManage() },
             title = { Text("管理分组") },
             text = {
-                if (groupCounts.isEmpty()) {
+                if (groupEntries.isEmpty()) {
                     Text("暂无分组", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    Column(
-                        Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        groupCounts.toList().sortedBy { it.first }.forEach { (name, count) ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(name, style = MaterialTheme.typography.bodyLarge)
-                                    Text(
-                                        "$count 条日程",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                IconButton(onClick = { confirmDeleteGroup = name }) {
-                                    Icon(
-                                        Icons.Default.Delete, "删除分组 $name",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
+                    Column {
+                        // 全选行：部分勾选时显示为不确定态
+                        val allState = when (selectedForDelete.size) {
+                            0 -> ToggleableState.Off
+                            allNames.size -> ToggleableState.On
+                            else -> ToggleableState.Indeterminate
+                        }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .triStateToggleable(allState) {
+                                    selectedForDelete =
+                                        if (allState == ToggleableState.On) emptySet() else allNames
+                                },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TriStateCheckbox(state = allState, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("全选", Modifier.weight(1f))
+                            Text(
+                                "${groupEntries.size} 个分组",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        HorizontalDivider()
+                        Column(
+                            Modifier.verticalScroll(rememberScrollState()).heightIn(max = 320.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            groupEntries.forEach { (name, count) ->
+                                val checked = name in selectedForDelete
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .toggleable(value = checked) { on ->
+                                            selectedForDelete =
+                                                if (on) selectedForDelete + name
+                                                else selectedForDelete - name
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(checked = checked, onCheckedChange = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            if (name.isBlank()) "未分组（默认）" else name,
+                                            style = MaterialTheme.typography.bodyLarge
+                                        )
+                                        Text(
+                                            "$count 条日程",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -304,26 +362,83 @@ fun HomeScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showManageGroups = false }) { Text("完成") }
-            }
+                TextButton(
+                    onClick = { confirmDeleteGroups = selectedForDelete },
+                    enabled = selectedForDelete.isNotEmpty()
+                ) {
+                    Text(
+                        "删除选中（${selectedForDelete.size}）",
+                        color = if (selectedForDelete.isEmpty()) Color.Unspecified
+                        else MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = { TextButton(onClick = { closeManage() }) { Text("完成") } }
         )
     }
 
-    // 删除分组二次确认
-    confirmDeleteGroup?.let { name ->
-        val count = events.count { it.group == name }
+    // 批量删除二次确认
+    confirmDeleteGroups?.let { sel ->
+        val affected = events.count { it.group in sel }
+        val hasDefault = "" in sel
+        // 「未分组」没有分组可移出，唯一说得通的删除方式就是连日程一起删
+        var alsoDeleteEvents by remember(sel) { mutableStateOf(hasDefault) }
+        val deleteEvents = hasDefault || alsoDeleteEvents
+        val names = sel.sorted().joinToString("") {
+            if (it.isBlank()) "「未分组」" else "「$it」"
+        }
+
         AlertDialog(
-            onDismissRequest = { confirmDeleteGroup = null },
-            title = { Text("删除分组「$name」？") },
-            text = { Text("该分组下 $count 条日程将变为未分组，日程本身不会被删除。") },
+            onDismissRequest = { confirmDeleteGroups = null },
+            title = { Text("删除 ${sel.size} 个分组？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("$names 共 $affected 条日程。")
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .toggleable(value = deleteEvents, enabled = !hasDefault) {
+                                alsoDeleteEvents = it
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = deleteEvents,
+                            onCheckedChange = null,
+                            enabled = !hasDefault
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "同时删除这些日程（否则仅移出分组，日程保留）",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    if (hasDefault) {
+                        Text(
+                            "「未分组」是默认分组，没有分组可移出，只能连同日程一起删除。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.deleteGroup(name)
-                    if (selectedGroup == name) selectedGroup = null
-                    confirmDeleteGroup = null
+                    val n = viewModel.deleteGroups(sel, deleteEvents)
+                    if (selectedGroup in sel) selectedGroup = null
+                    confirmDeleteGroups = null
+                    selectedForDelete = emptySet()
+                    showManageGroups = false
+                    Toast.makeText(
+                        context,
+                        if (deleteEvents) "已删除 $n 条日程" else "已将 $n 条日程移出分组",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = { TextButton({ confirmDeleteGroup = null }) { Text("取消") } }
+            dismissButton = {
+                TextButton({ confirmDeleteGroups = null }) { Text("取消") }
+            }
         )
     }
 

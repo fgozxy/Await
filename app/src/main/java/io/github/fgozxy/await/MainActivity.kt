@@ -2,6 +2,7 @@ package io.github.fgozxy.await
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -22,10 +23,11 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: EventViewModel
 
-    // 三项健康状态：可观察，onResume 时刷新，授权返回后横幅自动消失
+    // 四项健康状态：可观察，onResume 时刷新，授权返回后横幅自动消失
     private val exactAlarmOk = mutableStateOf(true)
     private val notifOk = mutableStateOf(true)
     private val battOptOk = mutableStateOf(true)
+    private val fullScreenOk = mutableStateOf(true)
 
     /** Android 13+ 通知运行时权限 */
     private val notifPermission =
@@ -65,6 +67,8 @@ class MainActivity : ComponentActivity() {
                     },
                     showBattBanner = !battOptOk.value,
                     onRequestBatt = { requestIgnoreBatteryOptimization() },
+                    showFullScreenBanner = !fullScreenOk.value,
+                    onRequestFullScreen = { requestFullScreenIntentPermission() },
                     onTestNotification = { NotificationHelper.showTestNotification(this) }
                 )
             }
@@ -87,6 +91,32 @@ class MainActivity : ComponentActivity() {
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
         battOptOk.value = isIgnoringBatteryOptimizations()
+        fullScreenOk.value = canUseFullScreenIntent()
+    }
+
+    /**
+     * Android 14 起 USE_FULL_SCREEN_INTENT 不再默认授予普通应用，被撤销后
+     * 闹钟的全屏提醒页根本弹不出来，只剩一条通知——必须显式引导用户去开。
+     */
+    private fun canUseFullScreenIntent(): Boolean {
+        if (Build.VERSION.SDK_INT < 34) return true
+        val nm = getSystemService(NotificationManager::class.java) ?: return true
+        return nm.canUseFullScreenIntent()
+    }
+
+    private fun requestFullScreenIntentPermission() {
+        if (Build.VERSION.SDK_INT < 34) return
+        runCatching {
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                Uri.parse("package:$packageName")
+            ))
+        }.onFailure {
+            startActivity(Intent(
+                Settings.ACTION_APP_NOTIFICATION_SETTINGS,
+                Uri.parse("package:$packageName")
+            ))
+        }
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
