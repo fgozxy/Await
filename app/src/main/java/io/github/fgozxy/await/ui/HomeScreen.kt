@@ -12,16 +12,19 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.triStateToggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
@@ -60,6 +63,8 @@ fun HomeScreen(
     showFullScreenBanner: Boolean = false,
     onRequestFullScreen: () -> Unit = {},
     onTestNotification: () -> Unit = {},
+    autoUpdateEnabled: Boolean = true,
+    onToggleAutoUpdate: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -103,8 +108,25 @@ fun HomeScreen(
     }
     val groups = groupEvents(filtered)
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // 左滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和它的闹钟一起回来
+    fun deleteWithUndo(event: Event) {
+        viewModel.delete(event.id)
+        scope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message = "已删除「${event.title}」",
+                actionLabel = "撤销",
+                withDismissAction = true,
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.upsert(event)
+        }
+    }
+
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { if (!searching) Text("Await") },
@@ -163,6 +185,17 @@ fun HomeScreen(
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.SystemUpdateAlt, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("自动更新") },
+                            onClick = { onToggleAutoUpdate(!autoUpdateEnabled) },
+                            leadingIcon = { Icon(Icons.Default.Sync, null) },
+                            trailingIcon = {
+                                Switch(
+                                    checked = autoUpdateEnabled,
+                                    onCheckedChange = { onToggleAutoUpdate(it) }
+                                )
+                            }
                         )
                         DropdownMenuItem(
                             text = { Text("备份与恢复") },
@@ -238,7 +271,8 @@ fun HomeScreen(
                 }
                 EventList(groups, viewModel,
                     onClick = { editing = it },
-                    onLongClick = { deleting = it })
+                    onLongClick = { deleting = it },
+                    onSwipeDelete = { deleteWithUndo(it) })
             }
         }
     }
@@ -627,6 +661,48 @@ private fun groupEvents(events: List<Event>): Groups {
     )
 }
 
+/**
+ * 左滑删除的包装：滑到底即触发 [onDelete]，滑出过程中露出红色底衬。
+ *
+ * 只允许从右往左滑——从左往右留给系统的返回手势，两者抢同一片区域会互相打架。
+ */
+@Composable
+private fun SwipeToDeleteBox(
+    onDelete: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                onDelete()
+                true
+            } else false
+        },
+        // 要滑过卡片宽度的一半才算数，避免列表滚动时蹭一下就误删
+        positionalThreshold = { it * 0.5f }
+    )
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 24.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+    ) { content() }
+}
+
 /** 列表按分组渲染 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -634,7 +710,8 @@ private fun EventList(
     groups: Groups,
     viewModel: EventViewModel,
     onClick: (Event) -> Unit,
-    onLongClick: (Event) -> Unit
+    onLongClick: (Event) -> Unit,
+    onSwipeDelete: (Event) -> Unit
 ) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -651,12 +728,14 @@ private fun EventList(
             }
             items(list.size, key = { list[it].id }) { i ->
                 val event = list[i]
-                EventCard(
-                    event = event,
-                    onClick = { onClick(event) },
-                    onLongClick = { onLongClick(event) },
-                    onTogglePin = { viewModel.togglePin(event.id) }
-                )
+                SwipeToDeleteBox(onDelete = { onSwipeDelete(event) }) {
+                    EventCard(
+                        event = event,
+                        onClick = { onClick(event) },
+                        onLongClick = { onLongClick(event) },
+                        onTogglePin = { viewModel.togglePin(event.id) }
+                    )
+                }
             }
         }
         item { Spacer(Modifier.height(72.dp)) } // 给 FAB 留空间
