@@ -20,9 +20,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
-import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import io.github.fgozxy.await.R
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,12 +73,18 @@ class AlarmRingService : Service() {
                 // 可能是进程被杀后用户才点的按钮，此时服务是刚被拉起来的：
                 // 必须先满足「5 秒内 startForeground」的约束再退出，否则系统会判定超时并崩溃。
                 ensureForeground(event)
-                if (eventId != -1L) AlarmScheduler.scheduleSnooze(this, eventId, SNOOZE_MINUTES)
+                if (eventId != -1L) {
+                    AlarmScheduler.scheduleSnooze(this, eventId, SNOOZE_MINUTES)
+                    // 用 intent 里的 id 而不是 _ringingEventId：进程被杀过的话后者已经是 null，
+                    // 那条提醒通知就会永远留在通知栏里划不掉
+                    NotificationHelper.cancelAlarmAlert(this, eventId)
+                }
                 shutdown()
             }
 
             ACTION_STOP -> {
                 ensureForeground(event)
+                if (eventId != -1L) NotificationHelper.cancelAlarmAlert(this, eventId)
                 shutdown()
             }
 
@@ -95,13 +99,17 @@ class AlarmRingService : Service() {
     // ── 响铃 ──────────────────────────────────────────────────────────
 
     private fun startRinging(event: Event) {
-        goForeground(NotificationHelper.buildAlarmNotification(this, event))
+        // 常驻通知只满足系统的前台服务要求，安静、低重要性
+        goForeground(NotificationHelper.buildAlarmServiceNotification(this, event))
         if (!foregrounded) {
             // 进不了前台就别硬撑：系统会在 5 秒后把服务判死，这里直接降级为普通提醒
             NotificationHelper.showEventReminder(this, event)
             stopSelf()
             return
         }
+        // 真正要让人看见的提醒单独发一条普通通知——前台服务通知会被手表 / 手环的
+        // 通知转发过滤掉，只有这条普通通知才同步得过去
+        NotificationHelper.showAlarmAlert(this, event)
         _ringingEventId.value = event.id
 
         acquireWakeLock()
@@ -114,6 +122,7 @@ class AlarmRingService : Service() {
             // 自动静音：停声停震、退出前台，补一条普通可划掉的通知留档
             stopSound()
             stopVibration()
+            NotificationHelper.cancelAlarmAlert(this, event.id)
             NotificationHelper.showEventReminder(this, event)
             shutdown()
         }
@@ -222,6 +231,7 @@ class AlarmRingService : Service() {
         autoSilence = null
         stopSound()
         stopVibration()
+        _ringingEventId.value?.let { NotificationHelper.cancelAlarmAlert(this, it) }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         foregrounded = false
         stopSelf()
@@ -254,16 +264,7 @@ class AlarmRingService : Service() {
     /** stop / snooze 分支的兜底：确保这次启动至少进过一次前台，再退出 */
     private fun ensureForeground(event: Event?) {
         if (foregrounded) return
-        val notification = if (event != null) {
-            NotificationHelper.buildAlarmNotification(this, event)
-        } else {
-            NotificationCompat.Builder(this, NotificationHelper.CHANNEL_ALARM)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Await")
-                .setSilent(true)
-                .build()
-        }
-        goForeground(notification)
+        goForeground(NotificationHelper.buildAlarmServiceNotification(this, event))
     }
 
     companion object {

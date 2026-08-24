@@ -34,6 +34,19 @@ object NotificationHelper {
      */
     const val CHANNEL_ALARM = "event_alarm_v1"
 
+    /**
+     * 前台服务的常驻通知渠道，低重要性、安静。
+     *
+     * 之所以要和 [CHANNEL_ALARM] 分开：前台服务通知会被系统打上
+     * FLAG_FOREGROUND_SERVICE 并强制常驻，而手表 / 手环的通知转发几乎都会
+     * 主动过滤这类「状态条」通知（音乐播放器、下载进度都属于这一类），
+     * 结果就是闹钟响了但手表上什么都收不到。
+     *
+     * 所以现在职责拆开：这个渠道只承担「服务在运行」的系统要求，
+     * 真正要让人看见的提醒走 [CHANNEL_ALARM] 的普通通知。
+     */
+    const val CHANNEL_ALARM_SERVICE = "alarm_service_v1"
+
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(
@@ -49,6 +62,18 @@ object NotificationHelper {
                 enableVibration(false)
                 setBypassDnd(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ALARM_SERVICE,
+                "闹钟运行状态",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "闹钟响铃期间的常驻状态提示"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
             }
         )
         nm.createNotificationChannel(
@@ -156,9 +181,11 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(true)          // 不可划掉：必须点「关闭」或「稍后提醒」
-            .setAutoCancel(false)
-            .setSilent(true)           // 出声的是服务里的 MediaPlayer，不是这条通知
+            // 刻意不设 ongoing / silent：常驻或静音的通知会被手表、手环的
+            // 通知转发当成「状态条」过滤掉，闹钟响了手表却收不到。
+            // 划掉这条 = 关掉闹钟，deleteIntent 负责把服务停掉。
+            .setAutoCancel(true)
+            .setDeleteIntent(servicePi(AlarmRingService.ACTION_STOP, RC_DELETE))
             .addAction(
                 0, "稍后提醒",
                 servicePi(AlarmRingService.ACTION_SNOOZE, RC_SNOOZE)
@@ -169,6 +196,52 @@ object NotificationHelper {
             )
             .build()
     }
+
+    /**
+     * 前台服务的常驻通知——只为满足系统「前台服务必须有通知」的要求。
+     *
+     * 刻意做得很轻：低重要性渠道、不出声、不带倒计时内容。真正要让人（和手表）
+     * 看见的是 [buildAlarmNotification] 那条普通通知。
+     */
+    fun buildAlarmServiceNotification(context: Context, event: Event?): Notification {
+        val builder = NotificationCompat.Builder(context, CHANNEL_ALARM_SERVICE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("闹钟提醒进行中")
+            .setContentText(event?.title?.takeIf { it.isNotBlank() } ?: "Await")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+        if (event != null) {
+            builder.addAction(
+                0, "关闭",
+                PendingIntent.getForegroundService(
+                    context,
+                    requestCode(event.id, RC_SERVICE_STOP),
+                    Intent(context, AlarmRingService::class.java)
+                        .setAction(AlarmRingService.ACTION_STOP)
+                        .putExtra(AlarmRingService.EXTRA_EVENT_ID, event.id),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        }
+        return builder.build()
+    }
+
+    /** 发出闹钟的提醒通知（与前台服务通知分开，手表才收得到） */
+    fun showAlarmAlert(context: Context, event: Event) {
+        if (!canNotify(context)) return
+        NotificationManagerCompat.from(context)
+            .notify(alarmAlertId(event.id), buildAlarmNotification(context, event))
+    }
+
+    fun cancelAlarmAlert(context: Context, eventId: Long) {
+        NotificationManagerCompat.from(context).cancel(alarmAlertId(eventId))
+    }
+
+    /** 提醒通知的 id：与普通提醒（用 event.id）错开，避免互相顶掉 */
+    private fun alarmAlertId(eventId: Long): Int = eventId.toInt() xor RC_ALERT_ID
 
     /** 定时备份失败提示：只在失败时打扰一次，成功静默 */
     fun showBackupFailed(context: Context, reason: String) {
@@ -196,6 +269,9 @@ object NotificationHelper {
     private const val RC_FULLSCREEN = 0x0F0F
     private const val RC_SNOOZE = 0x5A5A
     private const val RC_STOP = 0x3C3C
+    private const val RC_DELETE = 0x2D2D
+    private const val RC_SERVICE_STOP = 0x1E1E
+    private const val RC_ALERT_ID = 0x6B6B
 
     private fun requestCode(eventId: Long, salt: Int): Int = eventId.toInt() xor salt
 
