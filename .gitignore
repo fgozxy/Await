@@ -16,3 +16,6 @@ captures/
 keystore/
 keystore.properties
 *.jks
+
+# Kotlin 编译器守护进程的错误日志（构建产物，非源码）
+.kotlin/

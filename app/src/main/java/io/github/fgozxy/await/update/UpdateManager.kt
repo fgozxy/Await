@@ -2,6 +2,9 @@ package io.github.fgozxy.await.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -15,6 +18,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -28,10 +32,22 @@ import kotlin.coroutines.coroutineContext
  *  - 安装 URI 走 FileProvider：旧实现拼的 content://downloads/all_downloads/<id> 需要
  *    ACCESS_ALL_DOWNLOADS 签名权限，普通应用无权授予给安装器，必然安装失败。
  *  - 下载完成后校验 ZIP magic，避免把 HTML 错误页当成 APK 交给安装器。
+ *  - 直连不通时自动回退到镜像（见 [SOURCES]）：部分网络环境下 api.github.com 通、
+ *    github.com 不通，直连下载会卡在 connect 超时。
+ *  - 安装前比对签名（见 [signatureMatches]）：走镜像意味着安装包经过第三方之手，
+ *    必须确认它和已安装的应用是同一把钥匙签的，否则一律拒绝。
  */
 object UpdateManager {
 
     private const val API_LATEST = "https://api.github.com/repos/fgozxy/Await/releases/latest"
+
+    /**
+     * 取包地址的候选前缀，按顺序尝试，空串代表直连 GitHub。
+     *
+     * gh-proxy 同时能代理 api.github.com 和 release 资产；ghfast 只能代理资产
+     * （对 API 返回 403），所以它排在后面，只在下载阶段真正派上用场。
+     */
+    private val SOURCES = listOf("", "https://gh-proxy.com/", "https://ghfast.top/")
     private const val UA = "Await-Android-Updater"
     private const val CONNECT_TIMEOUT = 15_000
     private const val READ_TIMEOUT = 30_000
@@ -57,10 +73,25 @@ object UpdateManager {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
     }.getOrDefault("")
 
-    /** 查询最新版本；无更新返回 null */
+    /** 查询最新版本；无更新返回 null。直连失败时依次回退到镜像 */
     suspend fun checkLatest(currentVersion: String): Result<UpdateInfo?> = withContext(Dispatchers.IO) {
-        runCatching {
-            val conn = open(API_LATEST, followRedirects = true)
+        var last: Throwable? = null
+        var found: UpdateInfo? = null
+        for (prefix in SOURCES) {
+            coroutineContext.ensureActive()
+            val r = runCatching { fetchLatest(prefix + API_LATEST) }
+            r.getOrNull()?.let { found = it; last = null }
+            if (found != null) break
+            last = r.exceptionOrNull()
+            if (last is kotlinx.coroutines.CancellationException) throw last!!
+        }
+        val info = found ?: return@withContext Result.failure(last ?: IllegalStateException("检查更新失败"))
+        Result.success(if (isNewer(info.versionName, currentVersion)) info else null)
+    }
+
+    private fun fetchLatest(api: String): UpdateInfo {
+        return run {
+            val conn = open(api, followRedirects = true)
             conn.setRequestProperty("Accept", "application/vnd.github+json")
             try {
                 when (val code = conn.responseCode) {
@@ -85,8 +116,6 @@ object UpdateManager {
             } finally {
                 conn.disconnect()
             }
-        }.map { info ->
-            if (isNewer(info.versionName, currentVersion)) info else null
         }
     }
 
@@ -120,7 +149,49 @@ object UpdateManager {
             val target = File(dir, "Await-${info.versionName}.apk")
             val part = File(dir, "${target.name}.part")
 
-            var url = info.apkUrl
+            // 直连 → 镜像依次尝试，任一成功即止
+            var last: Throwable? = null
+            var ok = false
+            for (prefix in SOURCES) {
+                coroutineContext.ensureActive()
+                part.delete()
+                val r = runCatching { fetchTo(prefix + info.apkUrl, part, info.sizeBytes, onProgress) }
+                if (r.isSuccess) { ok = true; last = null; break }
+                last = r.exceptionOrNull()
+                if (last is kotlinx.coroutines.CancellationException) throw last
+            }
+            if (!ok) {
+                part.delete()
+                throw last ?: IllegalStateException("下载失败")
+            }
+
+            target.delete()
+            if (!part.renameTo(target)) {
+                part.delete()
+                error("安装包写入失败")
+            }
+            // 走过镜像的包必须验签：确认它和已安装的应用是同一把钥匙签的
+            if (!signatureMatches(context, target)) {
+                target.delete()
+                error("安装包签名与当前应用不一致，已阻止安装")
+            }
+            onProgress(100)
+            target
+        }.onFailure {
+            // runCatching 会吞掉取消异常，这里原样抛出，让调用方的取消语义保持正确
+            if (it is kotlinx.coroutines.CancellationException) throw it
+        }
+    }
+
+    /** 从单个地址下载到 [part]；失败抛异常，由调用方决定要不要换下一个源 */
+    private suspend fun fetchTo(
+        url0: String,
+        part: File,
+        expectedSize: Long,
+        onProgress: (Int) -> Unit
+    ) {
+        run {
+            var url = url0
             var conn = open(url)
             var redirects = 0
             while (true) {
@@ -141,7 +212,7 @@ object UpdateManager {
                 break
             }
 
-            val total = conn.contentLengthLong.takeIf { it > 0 } ?: info.sizeBytes
+            val total = conn.contentLengthLong.takeIf { it > 0 } ?: expectedSize
             try {
                 conn.inputStream.use { input ->
                     FileOutputStream(part).use { out ->
@@ -173,25 +244,64 @@ object UpdateManager {
                 conn.disconnect()
             }
 
-            if (total > 0 && part.length() != total) {
-                part.delete()
-                error("下载不完整，请重试")
-            }
-            if (!isApk(part)) {
-                part.delete()
-                error("下载到的不是有效安装包")
-            }
-            target.delete()
-            if (!part.renameTo(target)) {
-                part.delete()
-                error("安装包写入失败")
-            }
-            onProgress(100)
-            target
-        }.onFailure {
-            // runCatching 会吞掉取消异常，这里原样抛出，让调用方的取消语义保持正确
-            if (it is kotlinx.coroutines.CancellationException) throw it
+            if (total > 0 && part.length() != total) error("下载不完整，请重试")
+            if (!isApk(part)) error("下载到的不是有效安装包")
         }
+    }
+
+    /**
+     * 校验安装包与当前已安装应用的签名是否一致。
+     *
+     * 这是走镜像换来的必要代价：安装包经过第三方之手，必须确认它是同一把钥匙签的。
+     * Android 本身也拒绝用不同签名覆盖安装，但那样只会抛一个没头没尾的
+     * INSTALL_FAILED_UPDATE_INCOMPATIBLE，不如在这里拦下并说清楚原因。
+     *
+     * 失败策略刻意是「宽进严出」：只有在确实读出了签名且与本机不一致时才拦截，
+     * 任何一边读不出来都放行。因为最终的强制力本来就在系统手里——Android 一定会
+     * 拒绝用不同签名的包覆盖安装，这里只是想把那个没头没尾的
+     * INSTALL_FAILED_UPDATE_INCOMPATIBLE 提前变成一句人话。
+     *
+     * 反过来如果读不出签名就判失败，一旦某个 ROM 的 getPackageArchiveInfo 解析不了
+     * 我们这种纯 v2/v3 签名的包（本项目的 APK 没有 v1 JAR 签名），合法更新就会被
+     * 自己堵死，而用户还没法在应用内自救——那个代价比这道校验的收益大得多。
+     */
+    private fun signatureMatches(context: Context, apk: File): Boolean {
+        val pm = context.packageManager
+        val mine = signingDigests(
+            runCatching { pm.getPackageInfo(context.packageName, SIG_FLAGS) }.getOrNull()
+        )
+        if (mine.isEmpty()) return true
+        val theirs = signingDigests(
+            runCatching { pm.getPackageArchiveInfo(apk.absolutePath, SIG_FLAGS) }.getOrNull()
+        )
+        if (theirs.isEmpty()) return true
+        return theirs == mine
+    }
+
+    private val SIG_FLAGS: Int
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+
+    /** 取签名证书的 SHA-256 指纹集合 */
+    private fun signingDigests(info: PackageInfo?): Set<String> {
+        if (info == null) return emptySet()
+        val sigs: Array<Signature> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners ?: return emptySet()
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures ?: return emptySet()
+        }
+        return sigs.mapNotNull { sig ->
+            runCatching {
+                MessageDigest.getInstance("SHA-256")
+                    .digest(sig.toByteArray())
+                    .joinToString("") { "%02x".format(it) }
+            }.getOrNull()
+        }.toSet()
     }
 
     /** 校验 ZIP magic（APK 本质是 ZIP），拦住 HTML 错误页之类的假包 */
