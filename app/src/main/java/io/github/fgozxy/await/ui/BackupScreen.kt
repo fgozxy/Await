@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.FileDownload
@@ -62,6 +63,10 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     var showPassword by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
     var showAiPrompt by remember { mutableStateOf(false) }
+    // 粘贴导入：对话框开关 / 输入框内容 / 上一次解析失败的原因
+    var showPasteImport by remember { mutableStateOf(false) }
+    var pasteText by remember { mutableStateOf("") }
+    var pasteError by remember { mutableStateOf<String?>(null) }
 
     // 待确认导入：解析出来的日程 + 来源说明（本地文件 / 云端文件名）
     var pendingImport by remember { mutableStateOf<Pair<List<Event>, String>?>(null) }
@@ -191,7 +196,19 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                             Text("从文件导入")
                         }
                     }
-                    // 从别的倒数日应用搬家：截图 → AI → JSON → 上面的「从文件导入」
+                    OutlinedButton(
+                        onClick = {
+                            pasteText = ""
+                            pasteError = null
+                            showPasteImport = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.ContentPaste, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("粘贴 JSON 导入")
+                    }
+                    // 从别的倒数日应用搬家：截图 → AI → JSON → 上面两个导入入口
                     TextButton(
                         onClick = { showAiPrompt = true },
                         contentPadding = PaddingValues(horizontal = 4.dp)
@@ -463,6 +480,64 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         )
     }
 
+    // ── 粘贴 JSON 导入 ──
+    if (showPasteImport) {
+        AlertDialog(
+            onDismissRequest = { showPasteImport = false },
+            icon = { Icon(Icons.Default.ContentPaste, null) },
+            title = { Text("粘贴 JSON 导入") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "把 AI 返回的 JSON 粘到这里即可，外面裹着的 ``` 代码块或前后多余的说明文字都不用删。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = pasteText,
+                        onValueChange = { pasteText = it; pasteError = null },
+                        placeholder = { Text("[{\"title\": \"房租\", \"date\": \"2026-10-01\"}]") },
+                        isError = pasteError != null,
+                        supportingText = pasteError?.let { { Text(it) } },
+                        textStyle = MaterialTheme.typography.bodySmall
+                            .copy(fontFamily = FontFamily.Monospace),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 140.dp, max = 260.dp)
+                    )
+                    TextButton(
+                        onClick = {
+                            // 剪贴板里通常正是刚从 AI 那边复制回来的内容，省一次长按粘贴
+                            clipboard.getText()?.text?.let { pasteText = it; pasteError = null }
+                        },
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.ContentPaste, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("从剪贴板粘贴")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = pasteText.isNotBlank(),
+                    onClick = {
+                        BackupData.parse(pasteText)
+                            .onSuccess {
+                                showPasteImport = false
+                                pendingImport = it to "粘贴的内容"
+                            }
+                            // 失败留在对话框里就地报错，内容不清空，改两个字就能重试
+                            .onFailure { pasteError = it.message ?: "解析失败" }
+                    }
+                ) { Text("解析并导入") }
+            },
+            dismissButton = {
+                TextButton({ showPasteImport = false }) { Text("取消") }
+            }
+        )
+    }
+
     // ── AI 迁移提示词 ──
     if (showAiPrompt) {
         AlertDialog(
@@ -473,7 +548,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         "把下面这段提示词连同旧应用的截图一起发给 AI，它会返回一段 JSON；" +
-                            "存成 .json 文件后用上面的「从文件导入」读进来即可。",
+                            "复制那段 JSON 回来，用「粘贴 JSON 导入」直接读进来即可，不必存成文件。",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Surface(

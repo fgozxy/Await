@@ -115,9 +115,10 @@ object BackupData {
 
     /** 解析备份文本；失败时返回带中文原因的 Result */
     fun parse(json: String): Result<List<Event>> = runCatching {
-        if (json.isBlank()) error("文件内容为空")
-        val root = runCatching { JsonParser.parseString(json) }
-            .getOrElse { error("不是合法的 JSON 文件") }
+        if (json.isBlank()) error("内容为空")
+        val body = extractJson(json)
+        val root = runCatching { JsonParser.parseString(body) }
+            .getOrElse { error("不是合法的 JSON") }
         val array = when {
             root.isJsonArray -> root.asJsonArray
             root.isJsonObject && root.asJsonObject.has("events") ->
@@ -134,6 +135,28 @@ object BackupData {
         valid.mapIndexed { i, e ->
             if (e.id <= 0L || !seen.add(e.id)) e.copy(id = System.currentTimeMillis() + i) else e
         }
+    }
+
+    /**
+     * 从可能夹带解释文字或 markdown 代码块的文本里抠出 JSON 主体。
+     *
+     * 直接粘贴 AI 回复是最省事的迁移路径，而模型十有八九不会老老实实只吐 JSON：
+     * 要么裹一层 ```json 围栏，要么前后各加一句「好的，这是转换结果」。
+     * 与其让用户回去手工删干净，不如在这里容忍掉。
+     */
+    private fun extractJson(raw: String): String {
+        val text = raw.trim()
+        // 1) markdown 代码围栏：取第一段围栏内的内容
+        Regex("```(?:json)?\\s*([\\s\\S]*?)```")
+            .find(text)?.groupValues?.get(1)?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
+        // 2) 已经是纯 JSON
+        if (text.startsWith("[") || text.startsWith("{")) return text
+        // 3) 前后夹带说明文字：截取第一个开括号到最后一个闭括号
+        val start = text.indexOfFirst { it == '[' || it == '{' }
+        val end = text.indexOfLast { it == ']' || it == '}' }
+        return if (start in 0..<end) text.substring(start, end + 1) else text
     }
 
     /**
