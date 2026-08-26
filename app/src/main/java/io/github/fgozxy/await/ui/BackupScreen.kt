@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.FileDownload
@@ -19,8 +21,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -47,6 +52,7 @@ import kotlinx.coroutines.withContext
 fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
 
     var prefs by remember { mutableStateOf(BackupSettings.load(context)) }
     var busy by remember { mutableStateOf(false) }
@@ -55,6 +61,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     var statusOk by remember { mutableStateOf(true) }
     var showPassword by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    var showAiPrompt by remember { mutableStateOf(false) }
 
     // 待确认导入：解析出来的日程 + 来源说明（本地文件 / 云端文件名）
     var pendingImport by remember { mutableStateOf<Pair<List<Event>, String>?>(null) }
@@ -183,6 +190,15 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                             Spacer(Modifier.width(6.dp))
                             Text("从文件导入")
                         }
+                    }
+                    // 从别的倒数日应用搬家：截图 → AI → JSON → 上面的「从文件导入」
+                    TextButton(
+                        onClick = { showAiPrompt = true },
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("从其他应用迁移（AI 提示词）")
                     }
                 }
 
@@ -444,6 +460,60 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                 }
             },
             confirmButton = { TextButton({ remoteFiles = null }) { Text("取消") } }
+        )
+    }
+
+    // ── AI 迁移提示词 ──
+    if (showAiPrompt) {
+        AlertDialog(
+            onDismissRequest = { showAiPrompt = false },
+            icon = { Icon(Icons.Default.AutoAwesome, null) },
+            title = { Text("从其他应用迁移") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "把下面这段提示词连同旧应用的截图一起发给 AI，它会返回一段 JSON；" +
+                            "存成 .json 文件后用上面的「从文件导入」读进来即可。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            BackupData.AI_PROMPT,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier
+                                // 提示词较长，限高后自己滚动，免得把按钮挤出屏幕
+                                .heightIn(max = 260.dp)
+                                .padding(10.dp)
+                                .verticalScroll(rememberScrollState())
+                        )
+                    }
+                    Text(
+                        "导入前建议先「导出到文件」备份一份，结果不理想可以随时覆盖导入还原。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(BackupData.AI_PROMPT))
+                    showAiPrompt = false
+                    // Android 13+ 系统自己会弹复制提示，这里再给一条应用内回执，
+                    // 低版本上它就是唯一的反馈
+                    report(true, "提示词已复制，粘贴给 AI 即可")
+                }) {
+                    Icon(Icons.Default.ContentCopy, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("复制提示词")
+                }
+            },
+            dismissButton = {
+                TextButton({ showAiPrompt = false }) { Text("关闭") }
+            }
         )
     }
 

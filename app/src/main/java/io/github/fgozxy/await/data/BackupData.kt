@@ -53,6 +53,38 @@ object BackupData {
         val events: List<Event> = emptyList()
     )
 
+    /**
+     * 「把别的倒数日 App 截图交给 AI，让它吐出可导入的 JSON」用的现成提示词。
+     *
+     * 放在数据层而不是 UI 里：它描述的就是 [parse] 认得的那套字段，
+     * 两者必须同步——以后改导入格式，这段也要跟着改。
+     */
+    const val AI_PROMPT = """你是数据迁移助手。我会给你一款倒数日 / 纪念日 App 的截图，请把其中所有日程提取成 JSON 数组。
+只输出 JSON 本身，不要解释文字，不要 markdown 代码块。
+
+格式示例：
+[
+  {
+    "title": "房租",
+    "date": "2026-10-01",
+    "note": "备注，没有就省略",
+    "groupName": "分组名，没有就省略",
+    "repeatSpec": "MONTH:1",
+    "remindDaysBefore": [1],
+    "remindHour": 9,
+    "remindMinute": 0
+  }
+]
+
+规则：
+1. title 必填，其余字段截图里没有就省略，不要编造。
+2. date 一律写成 YYYY-MM-DD。
+3. repeatSpec 取值 "DAY:N" "WEEK:N" "MONTH:N" "YEAR:N"，N 为间隔数；
+   生日、纪念日用 "YEAR:1"；不重复的条目省略该字段。
+4. remindDaysBefore 是提前几天提醒的数组，0 表示当天，可多选，如 [0, 1, 7]。
+5. remindHour / remindMinute 是提醒时刻，省略则为 09:00。
+6. groupName 是分组名，如「生日」「订阅」；截图里有分类就照抄。"""
+
     /** 导入方式 */
     enum class Mode(val label: String, val desc: String) {
         MERGE("合并", "保留现有日程，同一条日程以备份中的为准"),
