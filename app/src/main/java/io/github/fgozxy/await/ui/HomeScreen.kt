@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Search
@@ -74,6 +75,7 @@ fun HomeScreen(
     // 备份与恢复 / 导入日程
     var showBackup by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
+    var showUnifiedNotify by remember { mutableStateOf(false) }
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
@@ -170,6 +172,11 @@ fun HomeScreen(
                             text = { Text("管理分组") },
                             onClick = { menuOpen = false; showManageGroups = true },
                             leadingIcon = { Icon(Icons.Default.Label, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("统一通知") },
+                            onClick = { menuOpen = false; showUnifiedNotify = true },
+                            leadingIcon = { Icon(Icons.Default.NotificationsPaused, null) }
                         )
                         DropdownMenuItem(
                             text = { Text("分配日程到分组") },
@@ -644,6 +651,11 @@ fun HomeScreen(
     // ── 导入日程 ──
     if (showImport) {
         ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
+    }
+
+    // ── 统一通知 ──
+    if (showUnifiedNotify) {
+        UnifiedNotifyScreen(viewModel = viewModel, onDismiss = { showUnifiedNotify = false })
     }
 }
 

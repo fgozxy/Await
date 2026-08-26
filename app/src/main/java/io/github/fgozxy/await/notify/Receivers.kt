@@ -7,6 +7,7 @@ import androidx.core.content.ContextCompat
 import io.github.fgozxy.await.backup.BackupScheduler
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
+import io.github.fgozxy.await.data.MergeStore
 
 /** 日程提醒触发入口 */
 class AlarmReceiver : BroadcastReceiver() {
@@ -42,6 +43,11 @@ class AlarmReceiver : BroadcastReceiver() {
      * ForegroundServiceStartNotAllowedException 会直接把 receiver 崩掉。
      */
     private fun fire(context: Context, event: Event) {
+        // 合并通知：同组成员在去重窗口内只提醒一次。
+        // 谁先触发谁负责响，其余的安静跳过——通知正文里已经带上了同组的其他日程。
+        MergeStore.groupOf(context, event.id)?.let { group ->
+            if (!MergeStore.shouldAlert(context, group.id)) return
+        }
         if (!event.isAlarmMode) {
             NotificationHelper.showEventReminder(context, event)
             return

@@ -15,6 +15,8 @@ import io.github.fgozxy.await.MainActivity
 import io.github.fgozxy.await.ReminderActivity
 import io.github.fgozxy.await.R
 import io.github.fgozxy.await.data.Event
+import io.github.fgozxy.await.data.EventStore
+import io.github.fgozxy.await.data.MergeStore
 
 /**
  * 通知中心：负责渠道管理与所有通知的构建展示。
@@ -101,6 +103,27 @@ object NotificationHelper {
                 PackageManager.PERMISSION_GRANTED
         } else true
 
+    /**
+     * 同一合并组里其他日程的标题；不在任何组里返回空列表。
+     *
+     * 只取标题不取详情：合并通知的定位是「这一天还有这些事」，一条条铺开
+     * 反而会把通知撑成一屏，真要看详情点进应用更合适。
+     */
+    private fun mergedPeers(context: Context, event: Event): List<String> {
+        val group = MergeStore.groupOf(context, event.id) ?: return emptyList()
+        val others = group.eventIds.filter { it != event.id }.toSet()
+        if (others.isEmpty()) return emptyList()
+        return EventStore.load(context)
+            .filter { it.id in others }
+            .map { it.title }
+            .filter { it.isNotBlank() }
+    }
+
+    /** 把同组其他日程接在正文后面 */
+    private fun withPeers(body: String, peers: List<String>): String =
+        if (peers.isEmpty()) body
+        else body + "\n\n同一天还有 ${peers.size} 件：\n" + peers.joinToString("\n") { "· $it" }
+
     /** 展示单条日程提醒 */
     // canNotify() 已挡在前面，lint 看不穿这层守卫
     @SuppressLint("MissingPermission")
@@ -112,8 +135,12 @@ object NotificationHelper {
             days > 0 -> "还有 $days 天"
             else -> "已过去 ${-days} 天"
         }
-        val text = "${event.dateText()} · $whenText" +
-            (if (event.note.isNotBlank()) "\n${event.note}" else "")
+        val peers = mergedPeers(context, event)
+        val text = withPeers(
+            "${event.dateText()} · $whenText" +
+                (if (event.note.isNotBlank()) "\n${event.note}" else ""),
+            peers
+        )
 
         // 全屏意图：触发时直接弹出应用内的全屏提醒页（锁屏也显示）
         val fullScreenPi = PendingIntent.getActivity(
@@ -127,7 +154,10 @@ object NotificationHelper {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_EVENTS)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("⏳ ${event.title}")
+            .setContentTitle(
+                if (peers.isEmpty()) "⏳ ${event.title}"
+                else "⏳ ${event.title} 等 ${peers.size + 1} 件"
+            )
             .setContentText("$whenText（${event.dateText()}）")
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(fullScreenPi)            // 点通知 → 直接进入全屏提醒页
@@ -164,6 +194,8 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val alarmPeers = mergedPeers(context, event)
+
         fun servicePi(action: String, rcSalt: Int) = PendingIntent.getForegroundService(
             context,
             requestCode(event.id, rcSalt),
@@ -175,11 +207,17 @@ object NotificationHelper {
 
         return NotificationCompat.Builder(context, CHANNEL_ALARM)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("⏳ ${event.title}")
+            .setContentTitle(
+                if (alarmPeers.isEmpty()) "⏳ ${event.title}"
+                else "⏳ ${event.title} 等 ${alarmPeers.size + 1} 件"
+            )
             .setContentText("$whenText（${event.dateText()}）")
             .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "${event.dateText()} · $whenText" +
-                    (if (event.note.isNotBlank()) "\n${event.note}" else "")
+                withPeers(
+                    "${event.dateText()} · $whenText" +
+                        (if (event.note.isNotBlank()) "\n${event.note}" else ""),
+                    alarmPeers
+                )
             ))
             .setContentIntent(fullScreenPi)
             .setFullScreenIntent(fullScreenPi, true)
