@@ -52,11 +52,17 @@ object BackupData {
         val eventCount: Int = 0,
         val events: List<Event> = emptyList(),
         /** v1.7.2 起备份显式创建的分组；旧备份没有该字段，解析时以 null 区分 */
-        val groups: List<String> = emptyList()
+        val groups: List<String> = emptyList(),
+        /** v1.8.1 起备份统一通知组 */
+        val mergeGroups: List<MergeGroup> = emptyList()
     )
 
-    /** 一次导入的完整内容；groups=null 表示旧备份或裸数组，没有分组元数据。 */
-    data class ImportBundle(val events: List<Event>, val groups: List<String>? = null)
+    /** null 表示旧备份或裸数组里没有对应元数据。 */
+    data class ImportBundle(
+        val events: List<Event>,
+        val groups: List<String>? = null,
+        val mergeGroups: List<MergeGroup>? = null
+    )
 
     /**
      * 「把别的倒数日 App 截图交给 AI，让它吐出可导入的 JSON」用的现成提示词。
@@ -110,7 +116,8 @@ object BackupData {
                 appVersion = version,
                 eventCount = events.size,
                 events = events,
-                groups = GroupStore.load(context)
+                groups = GroupStore.load(context),
+                mergeGroups = MergeStore.prune(context, events)
             )
         )
     }
@@ -156,7 +163,17 @@ object BackupData {
                 val raw: List<String?> = gson.fromJson(groupElement, groupType) ?: emptyList()
                 raw.filterNotNull().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             }
-        ImportBundle(normalizedEvents, groups)
+        val mergeGroups = root.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.takeIf { it.has("mergeGroups") }
+            ?.get("mergeGroups")
+            ?.takeIf { it.isJsonArray }
+            ?.let { mergeElement ->
+                val mergeType = object : TypeToken<List<MergeGroup?>>() {}.type
+                val raw: List<MergeGroup?> = gson.fromJson(mergeElement, mergeType) ?: emptyList()
+                MergeStore.sanitizeGroups(raw.filterNotNull(), normalizedEvents)
+            }
+        ImportBundle(normalizedEvents, groups, mergeGroups)
     }
 
     /**
@@ -232,7 +249,8 @@ object BackupData {
         context: Context,
         incoming: List<Event>,
         mode: Mode,
-        incomingGroups: List<String>? = null
+        incomingGroups: List<String>? = null,
+        incomingMergeGroups: List<MergeGroup>? = null
     ): ImportResult {
         val current = EventStore.load(context)
         // 旧闹钟一律先取消，避免被删掉/被覆盖的日程留下孤儿闹钟
@@ -265,6 +283,13 @@ object BackupData {
                 else (GroupStore.load(context) + safeGroups).distinct()
             )
         }
+        val stored = EventStore.load(context)
+        MergeStore.applyImport(
+            context = context,
+            incoming = incomingMergeGroups,
+            replace = mode == Mode.REPLACE,
+            events = stored
+        )
         AlarmScheduler.scheduleAll(context)
         return ImportResult(added, updated, result.size)
     }

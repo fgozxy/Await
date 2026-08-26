@@ -174,13 +174,16 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
     private fun refresh() {
         val list = EventStore.load(getApplication())
         // 日程被删掉后，合并组里会留下悬空的 id；顺手清一次，不足 2 条的组自动解散
-        MergeStore.prune(getApplication(), list.map { it.id }.toSet())
+        MergeStore.prune(getApplication(), list)
         _events.value = list.sortedWithDefault()
         _groups.value = loadGroups()
         _mergeGroups.value = loadMergeGroups()
     }
 
-    private fun loadMergeGroups(): List<MergeGroup> = MergeStore.load(getApplication())
+    private fun loadMergeGroups(): List<MergeGroup> {
+        val context = getApplication<Application>()
+        return MergeStore.prune(context, EventStore.load(context))
+    }
 
     /** 显式建过的分组 + 日程里出现过的分组，去重排序 */
     private fun loadGroups(): List<String> {

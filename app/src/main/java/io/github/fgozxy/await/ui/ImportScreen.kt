@@ -241,7 +241,13 @@ internal fun ImportConfirmDialog(
         scope.launch {
             // 导入要写存储并重排全部闹钟，放到 IO 线程避免卡界面
             val r = withContext(Dispatchers.IO) {
-                BackupData.applyImport(context, bundle.events, mode, bundle.groups)
+                BackupData.applyImport(
+                    context,
+                    bundle.events,
+                    mode,
+                    bundle.groups,
+                    bundle.mergeGroups
+                )
             }
             viewModel.reload()
             onDone(

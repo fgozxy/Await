@@ -4,110 +4,206 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
-/** 一个合并通知组：同一天的若干条日程共用一次提醒 */
+/** 一个合并通知组：提醒设置完全一致的若干条日程共用一次提醒。 */
 data class MergeGroup(
     val id: Long = System.currentTimeMillis(),
     val eventIds: List<Long> = emptyList()
 )
 
-/**
- * 合并通知的分组表。
- *
- * 解决的问题：同一天有好几件事时，到点会挨个响一遍。合并之后这一组只提醒一次，
- * 通知正文里把这一天的事一并列出来。
- *
- * 实现上刻意不改闹钟调度——每个成员的闹钟照旧各自存在，只在**触发那一刻**做去重：
- * 组内任一成员响过之后，[shouldAlert] 会让窗口期内的其他成员直接跳过。
- * 反过来做（只留一个成员的闹钟、取消其余）看着更"干净"，但一旦那个成员被删掉
- * 或改了日期，整组就会集体失声——漏提醒的代价远大于多写几行去重逻辑。
- */
+/** 决定两条日程能否真正统一提醒的完整签名。 */
+data class MergeKey(
+    val occurrenceEpochDay: Long,
+    val remindDaysBefore: List<Int>,
+    val remindHour: Int,
+    val remindMinute: Int,
+    val alarmMode: Boolean
+)
+
+/** 合并通知的分组表。 */
 object MergeStore {
 
     private const val PREFS = "await_merge"
     private const val KEY_GROUPS = "groups"
     private const val KEY_FIRED = "fired_at"
 
-    /** 同组去重窗口：组内成员在这段时间内重复触发只算一次 */
+    /** 同组去重窗口：同一触发点的成员在这段时间内重复到达只算一次。 */
     const val ALERT_WINDOW_MS = 2 * 60 * 1000L
 
     private val gson = Gson()
 
+    /** 日程当前的提醒签名；没有任何提醒时不能加入统一通知组。 */
+    fun keyOf(event: Event): MergeKey? {
+        val safe = event.sanitized()
+        if (safe.remindDaysBefore.isEmpty()) return null
+        return MergeKey(
+            occurrenceEpochDay = safe.nextOccurrence().toEpochDay(),
+            remindDaysBefore = safe.remindDaysBefore.distinct().sorted(),
+            remindHour = safe.remindHour,
+            remindMinute = safe.remindMinute,
+            alarmMode = safe.isAlarmMode
+        )
+    }
+
+    /** 一组日程当前是否仍能在相同时间、以相同模式提醒。 */
+    internal fun areCompatible(events: List<Event>): Boolean {
+        if (events.size < 2) return false
+        val keys = events.map { keyOf(it) }
+        return keys.firstOrNull() != null && keys.distinct().size == 1
+    }
+
     fun load(context: Context): List<MergeGroup> {
         val json = prefs(context).getString(KEY_GROUPS, null) ?: return emptyList()
-        val list = runCatching {
-            val type = object : TypeToken<List<MergeGroup>>() {}.type
-            gson.fromJson<List<MergeGroup>>(json, type)
+        val parsed = runCatching {
+            val type = object : TypeToken<List<MergeGroup?>>() {}.type
+            gson.fromJson<List<MergeGroup?>>(json, type)
         }.getOrNull() ?: return emptyList()
-        return list.filterNotNull()
-            .map { g -> g.copy(eventIds = g.eventIds.filterNotNull().distinct()) }
-            .filter { it.eventIds.size >= 2 }
+
+        val basic = parsed.filterNotNull().mapNotNull { group ->
+            @Suppress("UNCHECKED_CAST")
+            val ids = (group.eventIds as? List<Long?>)
+                ?.filterNotNull()
+                ?.distinct()
+                ?: emptyList()
+            group.copy(eventIds = ids).takeIf { ids.size >= 2 }
+        }
+        val normalized = ensureUniqueIds(basic)
+        if (normalized != basic) write(context, normalized)
+        return normalized
     }
 
     fun save(context: Context, groups: List<MergeGroup>) {
-        prefs(context).edit()
-            .putString(KEY_GROUPS, gson.toJson(groups.filter { it.eventIds.size >= 2 }))
-            .apply()
+        val valid = groups.map { it.copy(eventIds = it.eventIds.distinct()) }
+            .filter { it.eventIds.size >= 2 }
+        write(context, ensureUniqueIds(valid))
     }
 
-    /** 某条日程所属的合并组；没有则 null */
-    fun groupOf(context: Context, eventId: Long): MergeGroup? =
-        load(context).firstOrNull { eventId in it.eventIds }
+    /** 返回某条日程当前有效的合并组；调用时会同步清理过期关系。 */
+    fun groupOf(
+        context: Context,
+        eventId: Long,
+        events: List<Event> = EventStore.load(context)
+    ): MergeGroup? = prune(context, events).firstOrNull { eventId in it.eventIds }
 
-    /**
-     * 把若干条日程合并成一组。
-     *
-     * 这些 id 会先从原有的组里摘出来——一条日程只可能属于一个合并组，
-     * 否则触发时到底按哪一组去重就说不清了。
-     *
-     * @return 新建的组；少于 2 条时不成组，返回 null
-     */
+    /** 把若干条提醒签名一致的日程合并成一组。 */
     fun merge(context: Context, eventIds: Set<Long>): MergeGroup? {
         if (eventIds.size < 2) return null
-        val rest = load(context)
-            .map { g -> g.copy(eventIds = g.eventIds.filterNot { it in eventIds }) }
+        val events = EventStore.load(context)
+        val selected = events.filter { it.id in eventIds }
+        if (selected.size != eventIds.size || !areCompatible(selected)) return null
+
+        val current = prune(context, events)
+        val rest = current
+            .map { group -> group.copy(eventIds = group.eventIds.filterNot { it in eventIds }) }
             .filter { it.eventIds.size >= 2 }
-        val group = MergeGroup(eventIds = eventIds.sorted())
+        val group = MergeGroup(
+            id = nextUniqueId(current.map { it.id }.toSet()),
+            eventIds = eventIds.sorted()
+        )
         save(context, rest + group)
         return group
     }
 
-    /** 解散一个合并组 */
+    /** 解散一个合并组。组 ID 已在读取时去重，所以只会影响目标组。 */
     fun unmerge(context: Context, groupId: Long) {
         save(context, load(context).filterNot { it.id == groupId })
         clearFired(context, groupId)
     }
 
     /**
-     * 清理失效数据：日程被删掉后，成员随之减少；不足 2 条的组自动解散。
-     * 每次读日程列表时顺手调用，避免存下越来越多的死组。
+     * 清理并返回当前有效组。成员删除后可保留剩余成员；提醒签名不再一致则整组解散，
+     * 避免通知把不同日期或不同提醒模式的日程说成「同一天还有」。
      */
-    fun prune(context: Context, existingEventIds: Set<Long>) {
+    fun prune(context: Context, events: List<Event>): List<MergeGroup> {
         val current = load(context)
-        val pruned = current
-            .map { g -> g.copy(eventIds = g.eventIds.filter { it in existingEventIds }) }
-            .filter { it.eventIds.size >= 2 }
-        if (pruned != current) save(context, pruned)
+        val valid = sanitizeGroups(current, events)
+        if (valid != current) {
+            current.filter { old -> valid.none { it == old } }
+                .forEach { clearFired(context, it.id) }
+            save(context, valid)
+        }
+        return valid
     }
 
-    /**
-     * 该组现在是否应该真正提醒（响铃 / 发通知）。
-     *
-     * true 表示这是本轮的第一个成员，同时把时间戳记下；窗口期内后续成员拿到 false，
-     * 直接安静跳过。窗口取 2 分钟：同一时刻的闹钟实际触发可能差几秒到几十秒，
-     * 而两次真正该提醒的时间点不会挨得这么近。
-     */
+    /** 备份解析和恢复共用的纯数据校验。 */
+    internal fun sanitizeGroups(groups: List<MergeGroup>, events: List<Event>): List<MergeGroup> {
+        val byId = events.associateBy { it.id }
+        val claimed = HashSet<Long>()
+        val result = mutableListOf<MergeGroup>()
+        groups.forEach { group ->
+            val ids = group.eventIds.distinct().filter { it in byId && it !in claimed }
+            val members = ids.mapNotNull(byId::get)
+            if (ids.size >= 2 && areCompatible(members)) {
+                claimed += ids
+                result += group.copy(eventIds = ids.sorted())
+            }
+        }
+        return ensureUniqueIds(result)
+    }
+
+    /** 恢复备份里的统一通知组。 */
+    fun applyImport(
+        context: Context,
+        incoming: List<MergeGroup>?,
+        replace: Boolean,
+        events: List<Event>
+    ) {
+        val combined = when {
+            replace -> incoming.orEmpty()
+            incoming == null -> load(context)
+            else -> {
+                val incomingIds = incoming.flatMap { it.eventIds }.toSet()
+                load(context).map { group ->
+                    group.copy(eventIds = group.eventIds.filterNot { it in incomingIds })
+                }.filter { it.eventIds.size >= 2 } + incoming
+            }
+        }
+        // 裸数组/旧备份没有统一通知元数据；合并导入时保留现有组，也保留其去重窗口。
+        // 覆盖导入或显式恢复组时才重置时间戳，避免备份里的旧组状态影响新提醒。
+        if (replace || incoming != null) clearAllFired(context)
+        save(context, sanitizeGroups(combined, events))
+    }
+
+    /** 该组现在是否应该真正提醒（响铃 / 发通知）。 */
     fun shouldAlert(context: Context, groupId: Long, now: Long = System.currentTimeMillis()): Boolean {
         val sp = prefs(context)
         val key = "$KEY_FIRED:$groupId"
         val last = sp.getLong(key, 0L)
-        // 时钟被往回调过（last 在未来）也当作该提醒了，否则会一直静音
         if (last in 1..now && now - last < ALERT_WINDOW_MS) return false
         sp.edit().putLong(key, now).apply()
         return true
     }
 
+    /** 在已有 ID 集合上生成唯一 ID，批量建组也不会撞同一毫秒。 */
+    internal fun nextUniqueId(existing: Set<Long>, now: Long = System.currentTimeMillis()): Long {
+        var candidate = now
+        while (candidate in existing) {
+            candidate = if (candidate == Long.MAX_VALUE) Long.MIN_VALUE else candidate + 1L
+        }
+        return candidate
+    }
+
+    /** 修复 v1.8.0 可能已经写入的重复组 ID。 */
+    private fun ensureUniqueIds(groups: List<MergeGroup>): List<MergeGroup> {
+        val used = HashSet<Long>()
+        return groups.map { group ->
+            if (used.add(group.id)) group
+            else group.copy(id = nextUniqueId(used, group.id)).also { used += it.id }
+        }
+    }
+
+    private fun write(context: Context, groups: List<MergeGroup>) {
+        prefs(context).edit().putString(KEY_GROUPS, gson.toJson(groups)).apply()
+    }
+
     private fun clearFired(context: Context, groupId: Long) {
         prefs(context).edit().remove("$KEY_FIRED:$groupId").apply()
+    }
+
+    private fun clearAllFired(context: Context) {
+        val sp = prefs(context)
+        val editor = sp.edit()
+        sp.all.keys.filter { it.startsWith("$KEY_FIRED:") }.forEach(editor::remove)
+        editor.apply()
     }
 
     private fun prefs(context: Context) =

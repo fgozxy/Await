@@ -2,6 +2,7 @@ package io.github.fgozxy.await.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BackupDataTest {
@@ -34,14 +35,19 @@ class BackupDataTest {
         val json = """{
           "app":"Await",
           "formatVersion":1,
-          "events":[{"title":"一条日程","date":"2026-10-01"}],
-          "groups":[" 空分组 ","工作","工作",null]
+          "events":[
+            {"id":1,"title":"一条日程","date":"2026-10-01","remindDaysBefore":[0]},
+            {"id":2,"title":"另一条日程","date":"2026-10-01","remindDaysBefore":[0]}
+          ],
+          "groups":[" 空分组 ","工作","工作",null],
+          "mergeGroups":[{"id":10,"eventIds":[1,2]}]
         }""".trimIndent()
 
         val bundle = BackupData.parseBundle(json).getOrThrow()
 
         assertEquals(listOf("空分组", "工作"), bundle.groups)
-        assertEquals(1, bundle.events.size)
+        assertEquals(2, bundle.events.size)
+        assertEquals(listOf(MergeGroup(10, listOf(1, 2))), bundle.mergeGroups)
     }
 
     @Test
@@ -51,6 +57,22 @@ class BackupDataTest {
         ).getOrThrow()
 
         assertNull(bundle.groups)
+        assertNull(bundle.mergeGroups)
+    }
+
+    @Test
+    fun incompatibleMergeGroupFromBackupIsDiscarded() {
+        val bundle = BackupData.parseBundle(
+            """{
+              "events":[
+                {"id":1,"title":"普通通知","date":"2026-10-01","remindDaysBefore":[0],"alarmMode":false},
+                {"id":2,"title":"闹钟提醒","date":"2026-10-01","remindDaysBefore":[0],"alarmMode":true}
+              ],
+              "mergeGroups":[{"id":10,"eventIds":[1,2]}]
+            }""".trimIndent()
+        ).getOrThrow()
+
+        assertTrue(bundle.mergeGroups.orEmpty().isEmpty())
     }
 
     @Test

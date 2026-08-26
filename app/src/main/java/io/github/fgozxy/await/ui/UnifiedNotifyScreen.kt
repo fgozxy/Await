@@ -1,5 +1,6 @@
 package io.github.fgozxy.await.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -20,15 +21,16 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.fgozxy.await.data.Event
+import io.github.fgozxy.await.data.MergeKey
+import io.github.fgozxy.await.data.MergeStore
 import io.github.fgozxy.await.vm.EventViewModel
-import android.widget.Toast
 import java.time.LocalDate
 
 /**
  * 「统一通知」整页对话框。
  *
- * 自动把日程按「下一次发生的日期」归拢，同一天有两条以上的才列出来——只有这种情况
- * 才谈得上合并。勾选后建成合并组：到点只提醒一次，通知正文里带上同一天的其他事。
+ * 自动把日程按「下一次发生日期 + 提醒设置」归拢，只有实际会同时触发且提醒模式一致的
+ * 日程才允许合并。勾选后建成合并组：到点只提醒一次，通知正文里带上其他成员。
  *
  * 合并只影响提醒的发出方式，不动日程本身，也不动闹钟调度：每个成员的闹钟照旧存在，
  * 去重发生在触发那一刻（见 MergeStore.shouldAlert）。所以解散合并组是完全无损的，
@@ -43,27 +45,28 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
 
     var selected by remember { mutableStateOf(setOf<Long>()) }
 
-    // 按「下一次发生的日期」归拢，只留同一天两条以上的
-    val sameDayBuckets: List<Pair<LocalDate, List<Event>>> = remember(events) {
-        events.groupBy { it.nextOccurrence() }
+    // 只有目标日、提前天数、时刻、提醒模式全部相同，闹钟才会真正同时触发。
+    val compatibleBuckets: List<Pair<MergeKey, List<Event>>> = remember(events) {
+        events.mapNotNull { event -> MergeStore.keyOf(event)?.let { it to event } }
+            .groupBy(keySelector = { it.first }, valueTransform = { it.second })
             .filter { it.value.size >= 2 }
             .toList()
-            .sortedBy { it.first }
+            .sortedWith(compareBy({ it.first.occurrenceEpochDay }, { it.first.remindHour }, { it.first.remindMinute }))
     }
     val mergedIds = remember(mergeGroups) { mergeGroups.flatMap { it.eventIds }.toSet() }
-    val allCandidateIds = remember(sameDayBuckets) {
-        sameDayBuckets.flatMap { it.second }.map { it.id }.toSet()
+    val allCandidateIds = remember(compatibleBuckets) {
+        compatibleBuckets.flatMap { it.second }.map { it.id }.toSet()
     }
 
     fun toggleAll(on: Boolean) {
         selected = if (on) allCandidateIds else emptySet()
     }
 
-    /** 每个日期各自成一组：跨天的日程合在一起提醒没有意义 */
+    /** 每种兼容的提醒签名各自成组。 */
     fun mergeSelected() {
         var groups = 0
         var count = 0
-        sameDayBuckets.forEach { (_, dayEvents) ->
+        compatibleBuckets.forEach { (_, dayEvents) ->
             val ids = dayEvents.map { it.id }.filter { it in selected }.toSet()
             if (ids.size >= 2 && viewModel.mergeNotifications(ids)) {
                 groups++
@@ -74,7 +77,7 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         Toast.makeText(
             context,
             if (groups > 0) "已合并 $groups 组、共 $count 条日程"
-            else "同一天至少要选 2 条才能合并",
+            else "提醒日期和设置一致的日程至少要选 2 条",
             Toast.LENGTH_SHORT
         ).show()
     }
@@ -93,7 +96,7 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                 )
             },
             bottomBar = {
-                if (sameDayBuckets.isNotEmpty()) {
+                if (compatibleBuckets.isNotEmpty()) {
                     Surface(tonalElevation = 3.dp) {
                         Row(
                             Modifier
@@ -127,8 +130,8 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 SectionCard(
-                    "合并同一天的提醒",
-                    "同一天有多件事时，到点会挨个响一遍。合并之后这一组只提醒一次，通知里一并列出。"
+                    "合并同时触发的提醒",
+                    "日期、提前天数、提醒时刻和提醒模式一致时，合并后只提醒一次。"
                 ) {
                     Text(
                         "合并不改动日程本身，也不会让任何一条漏掉提醒——" +
@@ -168,9 +171,9 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                     }
                 }
 
-                // ── 自动检测出的同一天日程 ──
-                if (sameDayBuckets.isEmpty()) {
-                    SectionCard("没有可合并的日程", "目前没有任何两条日程落在同一天") {
+                // ── 自动检测出的兼容提醒 ──
+                if (compatibleBuckets.isEmpty()) {
+                    SectionCard("没有可合并的日程", "目前没有两条日程的日期和提醒设置完全一致") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.NotificationsPaused, null, Modifier.size(20.dp))
                             Spacer(Modifier.width(8.dp))
@@ -182,7 +185,8 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                         }
                     }
                 } else {
-                    sameDayBuckets.forEach { (date, dayEvents) ->
+                    compatibleBuckets.forEach { (key, dayEvents) ->
+                        val date = LocalDate.ofEpochDay(key.occurrenceEpochDay)
                         val dayIds = dayEvents.map { it.id }.toSet()
                         val chosen = dayIds.count { it in selected }
                         val dayState = when (chosen) {
@@ -191,13 +195,21 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                             else -> ToggleableState.Indeterminate
                         }
                         val days = dayEvents.first().daysFromToday()
+                        val timing = key.remindDaysBefore.joinToString("、") {
+                            if (it == 0) "当天" else "提前 ${it} 天"
+                        }
+                        val mode = if (key.alarmMode) "闹钟式" else "普通通知"
+                        val distance = when {
+                            days == 0 -> "就是今天"
+                            days > 0 -> "还有 $days 天"
+                            else -> "已过去 ${-days} 天"
+                        }
                         SectionCard(
                             "%04d-%02d-%02d".format(date.year, date.monthValue, date.dayOfMonth),
-                            when {
-                                days == 0 -> "就是今天 · ${dayEvents.size} 件"
-                                days > 0 -> "还有 $days 天 · ${dayEvents.size} 件"
-                                else -> "已过去 ${-days} 天 · ${dayEvents.size} 件"
-                            }
+                            "$distance · $timing · %02d:%02d · $mode · ${dayEvents.size} 件".format(
+                                key.remindHour,
+                                key.remindMinute
+                            )
                         ) {
                             Row(
                                 Modifier
@@ -210,7 +222,7 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                             ) {
                                 TriStateCheckbox(state = dayState, onClick = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("这一天全选", Modifier.weight(1f))
+                                Text("这一组全选", Modifier.weight(1f))
                             }
                             HorizontalDivider()
                             dayEvents.forEach { event ->

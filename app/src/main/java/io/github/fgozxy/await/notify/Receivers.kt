@@ -17,8 +17,9 @@ class AlarmReceiver : BroadcastReceiver() {
             ACTION_REMIND -> {
                 val id = intent.getLongExtra(EXTRA_EVENT_ID, -1L)
                 if (id == -1L) return
-                EventStore.load(context).find { it.id == id }?.let { event ->
-                    fire(context, event)
+                val events = EventStore.load(context)
+                events.find { it.id == id }?.let { event ->
+                    fire(context, event, events)
                     // 自动滚动到下一个提醒点（当天提醒触发后继续安排提前 N 天的下一年提醒等）
                     AlarmScheduler.scheduleEvent(context, event)
                 }
@@ -28,7 +29,8 @@ class AlarmReceiver : BroadcastReceiver() {
             ACTION_SNOOZE_FIRE -> {
                 val id = intent.getLongExtra(EXTRA_EVENT_ID, -1L)
                 if (id == -1L) return
-                EventStore.load(context).find { it.id == id }?.let { fire(context, it) }
+                val events = EventStore.load(context)
+                events.find { it.id == id }?.let { fire(context, it, events) }
             }
             Intent.ACTION_MY_PACKAGE_REPLACED -> AlarmScheduler.scheduleAll(context)
         }
@@ -42,10 +44,10 @@ class AlarmReceiver : BroadcastReceiver() {
      * 闹钟权限、调度降级成了 setWindow，豁免就不成立，
      * ForegroundServiceStartNotAllowedException 会直接把 receiver 崩掉。
      */
-    private fun fire(context: Context, event: Event) {
+    private fun fire(context: Context, event: Event, events: List<Event>) {
         // 合并通知：同组成员在去重窗口内只提醒一次。
         // 谁先触发谁负责响，其余的安静跳过——通知正文里已经带上了同组的其他日程。
-        MergeStore.groupOf(context, event.id)?.let { group ->
+        MergeStore.groupOf(context, event.id, events)?.let { group ->
             if (!MergeStore.shouldAlert(context, group.id)) return
         }
         if (!event.isAlarmMode) {
