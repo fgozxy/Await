@@ -69,10 +69,10 @@ object BackupService {
      * 下载云端某个备份并解析成日程（不落库，交给界面确认导入方式）。
      * name 传 [LATEST_NAME] 即取固定名的最新副本——服务器不支持 PROPFIND 列目录时的兜底路径。
      */
-    fun fetchBackup(context: Context, name: String): Result<List<io.github.fgozxy.await.data.Event>> {
+    fun fetchBackup(context: Context, name: String): Result<BackupData.ImportBundle> {
         val cfg = BackupSettings.load(context).webdav
         if (!cfg.isValid) return Result.failure(IllegalStateException("尚未配置 WebDAV 服务器"))
-        return WebDavClient.get(cfg, name).mapCatching { BackupData.parse(it).getOrThrow() }
+        return WebDavClient.get(cfg, name).mapCatching { BackupData.parseBundle(it).getOrThrow() }
     }
 
     /** 超出保留份数的历史快照从旧到新删除（list 已按时间倒序）；失败静默忽略 */

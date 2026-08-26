@@ -48,6 +48,9 @@ class AlarmRingService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var focusRequest: AudioFocusRequest? = null
 
+    /** 同一分钟可能有多条日程；声音共用，但每条提醒的关闭/稍后状态必须彼此独立。 */
+    private val activeEvents = linkedMapOf<Long, Event>()
+
     private val handler = Handler(Looper.getMainLooper())
     private var autoSilence: Runnable? = null
 
@@ -75,17 +78,17 @@ class AlarmRingService : Service() {
                 ensureForeground(event)
                 if (eventId != -1L) {
                     AlarmScheduler.scheduleSnooze(this, eventId, SNOOZE_MINUTES)
-                    // 用 intent 里的 id 而不是 _ringingEventId：进程被杀过的话后者已经是 null，
+                    // 用 intent 里的 id 而不是内存中的 activeEvents：进程被杀过的话后者已经为空，
                     // 那条提醒通知就会永远留在通知栏里划不掉
                     NotificationHelper.cancelAlarmAlert(this, eventId)
                 }
-                shutdown()
+                finishEvent(eventId)
             }
 
             ACTION_STOP -> {
                 ensureForeground(event)
                 if (eventId != -1L) NotificationHelper.cancelAlarmAlert(this, eventId)
-                shutdown()
+                finishEvent(eventId)
             }
 
             else -> {
@@ -99,6 +102,9 @@ class AlarmRingService : Service() {
     // ── 响铃 ──────────────────────────────────────────────────────────
 
     private fun startRinging(event: Event) {
+        activeEvents[event.id] = event
+        // 必须先登记再发 fullScreenIntent，避免提醒页启动得足够快时误判「服务没在响」并退出。
+        _ringingEventIds.value = activeEvents.keys.toSet()
         // 常驻通知只满足系统的前台服务要求，安静、低重要性
         goForeground(NotificationHelper.buildAlarmServiceNotification(this, event))
         if (!foregrounded) {
@@ -110,7 +116,6 @@ class AlarmRingService : Service() {
         // 真正要让人看见的提醒单独发一条普通通知——前台服务通知会被手表 / 手环的
         // 通知转发过滤掉，只有这条普通通知才同步得过去
         NotificationHelper.showAlarmAlert(this, event)
-        _ringingEventId.value = event.id
 
         acquireWakeLock()
         startSound()
@@ -119,11 +124,15 @@ class AlarmRingService : Service() {
         // 重新计时：连续两条日程同一分钟触发时，以最后一条为准
         autoSilence?.let { handler.removeCallbacks(it) }
         val task = Runnable {
-            // 自动静音：停声停震、退出前台，补一条普通可划掉的通知留档
+            // 自动静音：所有同时响铃的日程都补一条普通通知留档
             stopSound()
             stopVibration()
-            NotificationHelper.cancelAlarmAlert(this, event.id)
-            NotificationHelper.showEventReminder(this, event)
+            activeEvents.values.toList().forEach { active ->
+                NotificationHelper.cancelAlarmAlert(this, active.id)
+                NotificationHelper.showEventReminder(this, active)
+            }
+            activeEvents.clear()
+            _ringingEventIds.value = emptySet()
             shutdown()
         }
         autoSilence = task
@@ -225,13 +234,28 @@ class AlarmRingService : Service() {
         vibrator = null
     }
 
+    /** 只结束指定日程；还有其他日程在响时保持服务、声音和震动。 */
+    private fun finishEvent(eventId: Long) {
+        activeEvents.remove(eventId)
+        _ringingEventIds.value = activeEvents.keys.toSet()
+        val remaining = activeEvents.values.lastOrNull()
+        if (remaining == null) {
+            shutdown()
+        } else {
+            // 前台服务通知跟随仍在响的最后一条日程；普通提醒通知各自保留。
+            goForeground(NotificationHelper.buildAlarmServiceNotification(this, remaining))
+        }
+    }
+
     /** 停掉一切并结束服务 */
     private fun shutdown() {
         autoSilence?.let { handler.removeCallbacks(it) }
         autoSilence = null
         stopSound()
         stopVibration()
-        _ringingEventId.value?.let { NotificationHelper.cancelAlarmAlert(this, it) }
+        activeEvents.keys.forEach { NotificationHelper.cancelAlarmAlert(this, it) }
+        activeEvents.clear()
+        _ringingEventIds.value = emptySet()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         foregrounded = false
         stopSelf()
@@ -243,7 +267,8 @@ class AlarmRingService : Service() {
         stopVibration()
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
         wakeLock = null
-        _ringingEventId.value = null
+        activeEvents.clear()
+        _ringingEventIds.value = emptySet()
         super.onDestroy()
     }
 
@@ -283,13 +308,13 @@ class AlarmRingService : Service() {
         private const val WAKE_LOCK_TAG = "Await:alarm"
 
         /**
-         * 当前正在响的日程 id，没有则为 null。
+         * 当前正在响的全部日程 id；没有时为空集合。
          *
-         * [io.github.fgozxy.await.ReminderActivity] 直接观察它：服务一停（自动静音、
-         * 或用户从通知栏点了关闭），全屏页就自己退出，不必再走一套广播 IPC。
+         * [io.github.fgozxy.await.ReminderActivity] 直接观察它：对应日程停止响铃后，
+         * 全屏页就自己退出；Set 可避免同一分钟多条提醒互相误关。
          */
-        private val _ringingEventId = MutableStateFlow<Long?>(null)
-        val ringingEventId: StateFlow<Long?> get() = _ringingEventId
+        private val _ringingEventIds = MutableStateFlow<Set<Long>>(emptySet())
+        val ringingEventIds: StateFlow<Set<Long>> get() = _ringingEventIds
 
         /** 构造一个「开始响铃」的启动 Intent */
         fun ringIntent(context: Context, eventId: Long): Intent =

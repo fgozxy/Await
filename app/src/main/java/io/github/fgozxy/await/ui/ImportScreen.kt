@@ -24,7 +24,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.fgozxy.await.data.BackupData
-import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.vm.EventViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,7 +51,7 @@ fun ImportScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     var pasteError by remember { mutableStateOf<String?>(null) }
 
     // 待确认导入：解析出来的日程 + 来源说明
-    var pendingImport by remember { mutableStateOf<Pair<List<Event>, String>?>(null) }
+    var pendingImport by remember { mutableStateOf<Pair<BackupData.ImportBundle, String>?>(null) }
 
     fun report(ok: Boolean, msg: String) {
         statusOk = ok
@@ -69,7 +68,7 @@ fun ImportScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                     val text = context.contentResolver.openInputStream(uri)?.use {
                         it.bufferedReader().readText()
                     } ?: error("无法读取所选文件")
-                    BackupData.parse(text).getOrThrow()
+                    BackupData.parseBundle(text).getOrThrow()
                 }
             }
             r.onSuccess { pendingImport = it to "所选文件" }
@@ -141,7 +140,7 @@ fun ImportScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                         Button(
                             enabled = pasteText.isNotBlank(),
                             onClick = {
-                                BackupData.parse(pasteText)
+                                BackupData.parseBundle(pasteText)
                                     .onSuccess { pendingImport = it to "粘贴的内容" }
                                     // 失败就地报错、内容不清空，改两个字就能重试
                                     .onFailure { pasteError = it.message ?: "解析失败" }
@@ -206,9 +205,9 @@ fun ImportScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         }
     }
 
-    pendingImport?.let { (events, from) ->
+    pendingImport?.let { (bundle, from) ->
         ImportConfirmDialog(
-            events = events,
+            bundle = bundle,
             from = from,
             viewModel = viewModel,
             onDismiss = { pendingImport = null },
@@ -229,7 +228,7 @@ fun ImportScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
  */
 @Composable
 internal fun ImportConfirmDialog(
-    events: List<Event>,
+    bundle: BackupData.ImportBundle,
     from: String,
     viewModel: EventViewModel,
     onDismiss: () -> Unit,
@@ -242,7 +241,7 @@ internal fun ImportConfirmDialog(
         scope.launch {
             // 导入要写存储并重排全部闹钟，放到 IO 线程避免卡界面
             val r = withContext(Dispatchers.IO) {
-                BackupData.applyImport(context, events, mode)
+                BackupData.applyImport(context, bundle.events, mode, bundle.groups)
             }
             viewModel.reload()
             onDone(
@@ -257,7 +256,7 @@ internal fun ImportConfirmDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("导入 ${events.size} 条日程") },
+        title = { Text("导入 ${bundle.events.size} 条日程") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("来源：$from", style = MaterialTheme.typography.bodySmall)

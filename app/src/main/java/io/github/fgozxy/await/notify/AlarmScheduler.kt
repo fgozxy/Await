@@ -6,10 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import io.github.fgozxy.await.MainActivity
-import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -28,35 +26,36 @@ object AlarmScheduler {
 
     /** 计算某日程下一次提醒的触发时间；没有未来提醒时返回 null */
     fun nextTrigger(event: Event, from: LocalDateTime = LocalDateTime.now()): LocalDateTime? {
-        // 倒序检查：同一候选日中「提前天数大」的触发点更早到来，需优先命中
-        val offsets = event.remindDaysBefore.distinct().sortedDescending()
+        val safe = event.sanitized()
+        val offsets = safe.remindDaysBefore.distinct()
         if (offsets.isEmpty()) return null
+        val remindTime = java.time.LocalTime.of(safe.remindHour, safe.remindMinute)
 
-        var candidate = event.date
-        // 循环事件逐周期向后扫描；上限保护防止异常数据死循环
-        repeat(3650) {
-            for (offset in offsets) {
-                val trigger = candidate.minusDays(offset.toLong())
-                    .atTime(event.remindHour, event.remindMinute)
-                if (trigger.isAfter(from)) return trigger
+        // 分别求每个「提前 N 天」规则的下一个周期，再取最早者。这样无需从多年前逐周期扫描，
+        // 同时仍能在一次提醒触发后继续安排同一日程的下一档提前提醒。
+        return offsets.mapNotNull { offset ->
+            val firstCandidateDate = from.toLocalDate().plusDays(offset.toLong()).let {
+                if (remindTime.isAfter(from.toLocalTime())) it else it.plusDays(1)
             }
-            if (event.cycle == Cycle.NONE) return null
-            candidate = event.advanceDate(candidate)
-        }
-        return null
+            safe.occurrenceOnOrAfter(firstCandidateDate)
+                ?.minusDays(offset.toLong())
+                ?.atTime(remindTime)
+                ?.takeIf { it.isAfter(from) }
+        }.minOrNull()
     }
 
     fun scheduleEvent(context: Context, event: Event) {
-        cancel(context, event.id)
-        val trigger = nextTrigger(event) ?: return
+        val safe = event.sanitized()
+        cancel(context, safe.id)
+        val trigger = nextTrigger(safe) ?: return
 
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = pendingIntent(context, event.id)
+        val pi = pendingIntent(context, safe.id)
 
         val millis = trigger.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val canExact = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
         when {
-            canExact && event.isAlarmMode ->
+            canExact && safe.isAlarmMode ->
                 am.setAlarmClock(AlarmManager.AlarmClockInfo(millis, showIntent(context)), pi)
             canExact ->
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pi)

@@ -37,7 +37,7 @@ import io.github.fgozxy.await.ui.theme.EventColors
  * 闹钟模式（[EXTRA_ALARM_MODE]）下额外做三件事：
  *  - 屏蔽返回键与点击背景关闭——正在响铃时误触关掉是最糟的体验
  *  - 按钮换成「稍后提醒 / 关闭」，直接指挥 [AlarmRingService]
- *  - 观察 [AlarmRingService.ringingEventId]，服务一停（自动静音、或用户从通知栏
+ *  - 观察 [AlarmRingService.ringingEventIds]，对应日程一停（自动静音、或用户从通知栏
  *    点了关闭）本页就自己退出，不会留一个空壳页面在最前面
  */
 class ReminderActivity : ComponentActivity() {
@@ -77,8 +77,8 @@ class ReminderActivity : ComponentActivity() {
 
                 if (alarmMode) {
                     // 服务停了（自动静音 / 通知栏关闭）就跟着退出
-                    val ringing by AlarmRingService.ringingEventId.collectAsStateWithLifecycle()
-                    LaunchedEffect(ringing) { if (ringing == null) finish() }
+                    val ringing by AlarmRingService.ringingEventIds.collectAsStateWithLifecycle()
+                    LaunchedEffect(ringing, eventId) { if (eventId !in ringing) finish() }
                 }
 
                 ReminderOverlay(
@@ -141,7 +141,7 @@ private fun ReminderOverlay(
     onSnooze: () -> Unit,
     onOpenApp: () -> Unit
 ) {
-    val accent = EventColors[(event?.colorIndex ?: 0) % EventColors.size]
+    val accent = EventColors[Math.floorMod(event?.colorIndex ?: 0, EventColors.size)]
     val days = event?.daysFromToday() ?: 0
 
     Box(

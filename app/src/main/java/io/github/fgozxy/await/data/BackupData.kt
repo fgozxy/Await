@@ -50,8 +50,13 @@ object BackupData {
         val exportedAt: String = "",
         val appVersion: String = "",
         val eventCount: Int = 0,
-        val events: List<Event> = emptyList()
+        val events: List<Event> = emptyList(),
+        /** v1.7.2 起备份显式创建的分组；旧备份没有该字段，解析时以 null 区分 */
+        val groups: List<String> = emptyList()
     )
+
+    /** 一次导入的完整内容；groups=null 表示旧备份或裸数组，没有分组元数据。 */
+    data class ImportBundle(val events: List<Event>, val groups: List<String>? = null)
 
     /**
      * 「把别的倒数日 App 截图交给 AI，让它吐出可导入的 JSON」用的现成提示词。
@@ -104,7 +109,8 @@ object BackupData {
                 exportedAt = LocalDateTime.now().format(stampFormatter),
                 appVersion = version,
                 eventCount = events.size,
-                events = events
+                events = events,
+                groups = GroupStore.load(context)
             )
         )
     }
@@ -113,8 +119,11 @@ object BackupData {
     fun defaultFileName(now: LocalDateTime = LocalDateTime.now()): String =
         "Await-backup-${now.format(fileStampFormatter)}.json"
 
+    /** 兼容旧调用：只取日程。需要恢复空分组时使用 [parseBundle]。 */
+    fun parse(json: String): Result<List<Event>> = parseBundle(json).map { it.events }
+
     /** 解析备份文本；失败时返回带中文原因的 Result */
-    fun parse(json: String): Result<List<Event>> = runCatching {
+    fun parseBundle(json: String): Result<ImportBundle> = runCatching {
         if (json.isBlank()) error("内容为空")
         val body = extractJson(json)
         val root = runCatching { JsonParser.parseString(body) }
@@ -126,15 +135,28 @@ object BackupData {
             else -> error("这不是 Await 的备份文件")
         }
         normalizeDates(array)
-        val type = object : TypeToken<List<Event>>() {}.type
-        val events: List<Event> = gson.fromJson(array, type) ?: emptyList()
-        val valid = events.filterNotNull().filter { it.title.isNotBlank() }
-        if (valid.isEmpty()) error("备份中没有可用的日程")
+        val type = object : TypeToken<List<Event?>>() {}.type
+        val events: List<Event?> = gson.fromJson(array, type) ?: emptyList()
+        val valid = events.filterNotNull().map { it.sanitized() }.filter { it.title.isNotBlank() }
+        // 自描述备份允许 0 条日程：用户可能只备份了刚建好的空分组，或希望覆盖恢复为空。
+        // 裸数组仍要求至少有一条有效日程，避免把误粘贴的 [] 当成一次有效导入。
+        if (valid.isEmpty() && root.isJsonArray) error("备份中没有可用的日程")
         // id 缺失/重复的数据补一个唯一 id，避免互相覆盖
         val seen = HashSet<Long>()
-        valid.mapIndexed { i, e ->
+        val normalizedEvents = valid.mapIndexed { i, e ->
             if (e.id <= 0L || !seen.add(e.id)) e.copy(id = System.currentTimeMillis() + i) else e
         }
+        val groups = root.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.takeIf { it.has("groups") }
+            ?.get("groups")
+            ?.takeIf { it.isJsonArray }
+            ?.let { groupElement ->
+                val groupType = object : TypeToken<List<String>>() {}.type
+                val raw: List<String?> = gson.fromJson(groupElement, groupType) ?: emptyList()
+                raw.filterNotNull().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            }
+        ImportBundle(normalizedEvents, groups)
     }
 
     /**
@@ -206,7 +228,12 @@ object BackupData {
     private val DATE_PATTERN = Regex("""^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})""")
 
     /** 把解析出的日程写回本地，并重排全部闹钟 */
-    fun applyImport(context: Context, incoming: List<Event>, mode: Mode): ImportResult {
+    fun applyImport(
+        context: Context,
+        incoming: List<Event>,
+        mode: Mode,
+        incomingGroups: List<String>? = null
+    ): ImportResult {
         val current = EventStore.load(context)
         // 旧闹钟一律先取消，避免被删掉/被覆盖的日程留下孤儿闹钟
         current.forEach { AlarmScheduler.cancel(context, it.id) }
@@ -215,8 +242,8 @@ object BackupData {
         var added = 0
         var updated = 0
         if (mode == Mode.REPLACE) {
-            result = incoming
-            added = incoming.size
+            result = incoming.map { it.sanitized() }
+            added = result.size
         } else {
             val merged = current.toMutableList()
             incoming.forEach { e ->
@@ -230,6 +257,14 @@ object BackupData {
             result = merged
         }
         EventStore.save(context, result)
+        if (incomingGroups != null) {
+            val safeGroups = incomingGroups.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            GroupStore.save(
+                context,
+                if (mode == Mode.REPLACE) safeGroups
+                else (GroupStore.load(context) + safeGroups).distinct()
+            )
+        }
         AlarmScheduler.scheduleAll(context)
         return ImportResult(added, updated, result.size)
     }

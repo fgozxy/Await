@@ -825,7 +825,7 @@ private fun EventCard(
     onLongClick: () -> Unit,
     onTogglePin: () -> Unit
 ) {
-    val accent = EventColors[event.colorIndex % EventColors.size]
+    val accent = EventColors[Math.floorMod(event.colorIndex, EventColors.size)]
     val days = event.daysFromToday()
 
     ElevatedCard(

@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 
 /**
@@ -85,17 +86,7 @@ data class Event(
      * 不重复事件返回原日期；循环事件自动向前滚动到今天及以后。
      */
     fun nextOccurrence(): LocalDate {
-        val target = date
-        val r = repeat
-        if (r.cycle == Cycle.NONE) return target
-        var d = target
-        val today = LocalDate.now()
-        // 上限保护：最多推进 3650 个周期（约 10 年）
-        repeat(3650) {
-            if (ChronoUnit.DAYS.between(today, d) >= 0) return d
-            d = advanceDate(d)
-        }
-        return d
+        return occurrenceOnOrAfter(LocalDate.now()) ?: date
     }
 
     /** 距目标日还有几天；负数表示已过去 N 天（循环事件永远基于下一周期计算） */
@@ -117,20 +108,90 @@ data class Event(
         }
     }
 
-    /** 按当前循环配置，从指定日期推进到下一周期 */
-    fun advanceDate(d: LocalDate): LocalDate {
+    /**
+     * 返回不早于 [threshold] 的第一个周期日期；不重复且原日期已过时返回 null。
+     *
+     * 每次都从原始日期按「第 N 个周期」计算，不能在上一次结果上继续 plusMonths/plusYears：
+     * 1 月 31 日先被截成 2 月 28 日后，链式推进会永久变成每月 28 日；闰日也会永远丢失。
+     * 直接估算周期序号同时去掉了旧实现 3650 次循环的上限。
+     */
+    fun occurrenceOnOrAfter(threshold: LocalDate): LocalDate? {
+        val target = date
         val r = repeat
-        val n = r.n.toLong()
-        return when (r.cycle) {
-            Cycle.DAY -> d.plusDays(n)
-            Cycle.WEEK -> d.plusWeeks(n)
-            Cycle.MONTH -> d.plusMonths(n)
-            Cycle.YEAR -> d.plusYears(n)
-            Cycle.NONE -> d
+        if (r.cycle == Cycle.NONE) return target.takeIf { !it.isBefore(threshold) }
+        if (!target.isBefore(threshold)) return target
+
+        val units = when (r.cycle) {
+            Cycle.DAY -> ChronoUnit.DAYS.between(target, threshold)
+            Cycle.WEEK -> ChronoUnit.DAYS.between(target, threshold) / 7L
+            Cycle.MONTH -> ChronoUnit.MONTHS.between(YearMonth.from(target), YearMonth.from(threshold))
+            Cycle.YEAR -> (threshold.year - target.year).toLong()
+            Cycle.NONE -> 0L
+        }.coerceAtLeast(0L)
+
+        var index = units / r.n.toLong()
+        var candidate = occurrenceAt(index) ?: return null
+        while (candidate.isBefore(threshold)) {
+            index++
+            candidate = occurrenceAt(index) ?: return null
         }
+        return candidate
+    }
+
+    /** 始终以原始目标日期为锚点计算第 [index] 个周期，避免月末/闰日漂移。 */
+    private fun occurrenceAt(index: Long): LocalDate? = runCatching {
+        val amount = Math.multiplyExact(repeat.n.toLong(), index)
+        when (repeat.cycle) {
+            Cycle.DAY -> date.plusDays(amount)
+            Cycle.WEEK -> date.plusWeeks(amount)
+            Cycle.MONTH -> date.plusMonths(amount)
+            Cycle.YEAR -> date.plusYears(amount)
+            Cycle.NONE -> date
+        }
+    }.getOrNull()
+
+    /**
+     * 清洗来自 Gson/旧版本存储的数据。
+     *
+     * Gson 可以把 JSON null 塞进 Kotlin 的非空字段，也能绕过 UI 的数值范围限制；
+     * 所有落库、导入和调度入口都调用这里，避免一条坏数据让应用以后每次启动都崩溃。
+     */
+    @Suppress("UNCHECKED_CAST", "USELESS_CAST")
+    fun sanitized(): Event {
+        val safeTitle = (title as String?).orEmpty().trim()
+        val safeNote = (note as String?).orEmpty()
+        val rawReminders = remindDaysBefore as? List<Int?>
+        val safeReminders = rawReminders
+            ?.filterNotNull()
+            ?.filter { it in 0..MAX_REMIND_DAYS }
+            ?.distinct()
+            ?.sorted()
+            ?: listOf(DEFAULT_REMIND_DAYS)
+        val safeDate = runCatching { LocalDate.ofEpochDay(dateEpochDay) }
+            .getOrNull()
+            ?.takeIf { it.year in MIN_IMPORT_YEAR..MAX_IMPORT_YEAR }
+            ?.toEpochDay()
+            ?: LocalDate.now().toEpochDay()
+
+        return copy(
+            title = safeTitle,
+            dateEpochDay = safeDate,
+            note = safeNote,
+            colorIndex = colorIndex.coerceAtLeast(0),
+            remindDaysBefore = safeReminders,
+            remindHour = remindHour.takeIf { it in 0..23 } ?: DEFAULT_REMIND_HOUR,
+            remindMinute = remindMinute.takeIf { it in 0..59 } ?: DEFAULT_REMIND_MINUTE
+        )
     }
 
     companion object {
+        private const val DEFAULT_REMIND_DAYS = 1
+        private const val DEFAULT_REMIND_HOUR = 9
+        private const val DEFAULT_REMIND_MINUTE = 0
+        private const val MAX_REMIND_DAYS = 3650
+        private const val MIN_IMPORT_YEAR = 1900
+        private const val MAX_IMPORT_YEAR = 2999
+
         /** 解析存储的循环配置；任何异常数据一律安全回退为「不重复」 */
         fun parseRepeat(spec: String?, legacyCycle: String?, legacyDays: Int, legacyYearly: Boolean): Repeat {
             // 1) 新格式 "CYCLE:N"
@@ -183,8 +244,8 @@ object EventStore {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val json = sp.getString(KEY, null) ?: return mutableListOf()
         val list = runCatching {
-            val type = object : TypeToken<MutableList<Event>>() {}.type
-            gson.fromJson<MutableList<Event>>(json, type)
+            val type = object : TypeToken<MutableList<Event?>>() {}.type
+            gson.fromJson<MutableList<Event?>>(json, type)
         }.getOrNull()
         if (list == null) {
             // 解析不了就先把原文留一份：下一次保存会覆盖 KEY，留档才有机会人工找回
@@ -193,13 +254,15 @@ object EventStore {
             }
             return mutableListOf()
         }
-        // 清掉无法解析的坏数据，防止崩溃
-        list.removeAll { it == null || it.title.isNullOrBlank() }
-        return list
+        // 清掉无法解析的坏数据并修正越界/null 字段，防止启动后在 UI 或闹钟调度中崩溃
+        return list.mapNotNull { raw ->
+            raw?.sanitized()?.takeIf { it.title.isNotBlank() }
+        }.toMutableList()
     }
 
     fun save(context: Context, events: List<Event>) {
+        val safe = events.map { it.sanitized() }.filter { it.title.isNotBlank() }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY, gson.toJson(events)).apply()
+            .edit().putString(KEY, gson.toJson(safe)).apply()
     }
 }

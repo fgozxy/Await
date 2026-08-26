@@ -30,7 +30,6 @@ import io.github.fgozxy.await.backup.BackupService
 import io.github.fgozxy.await.backup.BackupSettings
 import io.github.fgozxy.await.backup.WebDavClient
 import io.github.fgozxy.await.data.BackupData
-import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
 import io.github.fgozxy.await.vm.EventViewModel
 import kotlinx.coroutines.Dispatchers
@@ -56,7 +55,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     var showTimePicker by remember { mutableStateOf(false) }
 
     // 待确认导入：解析出来的日程 + 来源说明（本地文件 / 云端文件名）
-    var pendingImport by remember { mutableStateOf<Pair<List<Event>, String>?>(null) }
+    var pendingImport by remember { mutableStateOf<Pair<BackupData.ImportBundle, String>?>(null) }
     var remoteFiles by remember { mutableStateOf<List<WebDavClient.Entry>?>(null) }
 
     fun report(ok: Boolean, msg: String) {
@@ -424,9 +423,9 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     }
 
     // ── 导入方式确认（云端恢复用；本地导入已挪到「导入日程」）──
-    pendingImport?.let { (events, from) ->
+    pendingImport?.let { (bundle, from) ->
         ImportConfirmDialog(
-            events = events,
+            bundle = bundle,
             from = from,
             viewModel = viewModel,
             onDismiss = { pendingImport = null },

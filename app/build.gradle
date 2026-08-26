@@ -19,8 +19,8 @@ android {
         applicationId "io.github.fgozxy.await"
         minSdk 26
         targetSdk 34
-        versionCode 26
-        versionName "1.7.1"
+        versionCode 27
+        versionName "1.7.2"
     }
 
     signingConfigs {
@@ -76,4 +76,6 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended:1.7.0'
 
     implementation 'com.google.code.gson:gson:2.10.1'
+
+    testImplementation 'junit:junit:4.13.2'
 }
