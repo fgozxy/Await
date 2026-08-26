@@ -4,9 +4,12 @@ import android.content.Context
 import com.google.gson.ExclusionStrategy
 import com.google.gson.FieldAttributes
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import io.github.fgozxy.await.notify.AlarmScheduler
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -22,7 +25,8 @@ import java.time.format.DateTimeFormatter
  *   "events": [ { "id": 1690000000000, "title": "…", … } ]
  * }
  * ```
- * 读取时同时兼容「裸数组」格式（即直接是 events 数组），方便手工编辑的文件也能导入。
+ * 读取时同时兼容「裸数组」格式（即直接是 events 数组），方便手工编辑的文件也能导入；
+ * 日期也允许写成 `"date": "2026-10-01"`（见 [normalizeDates]），不必自己换算 epoch day。
  */
 object BackupData {
 
@@ -88,6 +92,7 @@ object BackupData {
                 root.asJsonObject.getAsJsonArray("events")
             else -> error("这不是 Await 的备份文件")
         }
+        normalizeDates(array)
         val type = object : TypeToken<List<Event>>() {}.type
         val events: List<Event> = gson.fromJson(array, type) ?: emptyList()
         val valid = events.filterNotNull().filter { it.title.isNotBlank() }
@@ -98,6 +103,52 @@ object BackupData {
             if (e.id <= 0L || !seen.add(e.id)) e.copy(id = System.currentTimeMillis() + i) else e
         }
     }
+
+    /**
+     * 把条目里的 `date` 字符串就地翻译成 [Event.dateEpochDay]。
+     *
+     * 存储层的日期是 epoch day（1970-01-01 起的天数），这个数字人算不出来、
+     * 大模型也经常算错，而算错了不会报错——只会静默生成一条日期离谱的日程。
+     * 所以导入时额外认一个人类可读的 `date` 字段，专供手工编辑和「截图交给 AI
+     * 转 JSON」这类迁移场景。
+     *
+     * `date` 解析成功时优先于 `dateEpochDay`：应用自己导出的文件根本不含 `date`，
+     * 两者同时出现只可能来自手写/生成的数据，那种情况下人写的日期才是本意，
+     * 旁边那个 epoch day 恰恰是最可能算错的部分。解析失败则原样不动，
+     * 让后面照旧走 `dateEpochDay` 或默认值，不因为一条格式古怪的日期毁掉整次导入。
+     */
+    private fun normalizeDates(array: JsonArray) {
+        array.forEach { element ->
+            val obj = element as? JsonObject ?: return@forEach
+            val raw = obj.get("date")
+                ?.takeIf { it.isJsonPrimitive }
+                ?.asString
+                ?: return@forEach
+            val day = parseDateText(raw) ?: return@forEach
+            obj.addProperty("dateEpochDay", day)
+        }
+    }
+
+    /**
+     * 宽松解析日期文本，返回 epoch day；认不出来返回 null。
+     *
+     * 刻意不用 [java.time.format.DateTimeFormatter]：手写和模型生成的日期
+     * 分隔符五花八门（`-` `/` `.`），月日补不补零也随缘，还常常拖一个
+     * `T00:00:00` 的尾巴。与其排列组合一堆 formatter，不如直接抓 年-月-日 三个数字。
+     */
+    private fun parseDateText(text: String): Long? {
+        val m = DATE_PATTERN.find(text.trim()) ?: return null
+        val (y, mo, d) = m.destructured
+        return runCatching {
+            LocalDate.of(y.toInt(), mo.toInt(), d.toInt())
+                // 年份离谱的多半是解析错位（如把时长/编号当成日期），宁可丢弃
+                .takeIf { it.year in 1900..2999 }
+                ?.toEpochDay()
+        }.getOrNull()
+    }
+
+    /** `2026-10-01` / `2026/10/1` / `2026.10.01` / `2026-10-01T09:00` 都能命中 */
+    private val DATE_PATTERN = Regex("""^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})""")
 
     /** 把解析出的日程写回本地，并重排全部闹钟 */
     fun applyImport(context: Context, incoming: List<Event>, mode: Mode): ImportResult {
