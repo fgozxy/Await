@@ -8,13 +8,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -22,11 +18,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -53,7 +46,6 @@ import kotlinx.coroutines.withContext
 fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
 
     var prefs by remember { mutableStateOf(BackupSettings.load(context)) }
     var busy by remember { mutableStateOf(false) }
@@ -62,11 +54,6 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     var statusOk by remember { mutableStateOf(true) }
     var showPassword by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
-    var showAiPrompt by remember { mutableStateOf(false) }
-    // 粘贴导入：对话框开关 / 输入框内容 / 上一次解析失败的原因
-    var showPasteImport by remember { mutableStateOf(false) }
-    var pasteText by remember { mutableStateOf("") }
-    var pasteError by remember { mutableStateOf<String?>(null) }
 
     // 待确认导入：解析出来的日程 + 来源说明（本地文件 / 云端文件名）
     var pendingImport by remember { mutableStateOf<Pair<List<Event>, String>?>(null) }
@@ -118,24 +105,6 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         }
     }
 
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val r = withContext(Dispatchers.IO) {
-                runCatching {
-                    val text = context.contentResolver.openInputStream(uri)?.use {
-                        it.bufferedReader().readText()
-                    } ?: error("无法读取所选文件")
-                    BackupData.parse(text).getOrThrow()
-                }
-            }
-            r.onSuccess { pendingImport = it to "所选文件" }
-                .onFailure { report(false, "导入失败：${it.message}") }
-        }
-    }
-
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -177,46 +146,20 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                 }
 
                 // ── 本地备份 ──
-                SectionCard("本地备份", "导出为 JSON 文件保存到手机或发给自己；换机时再导入回来") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { exportLauncher.launch(BackupData.defaultFileName()) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.FileUpload, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("导出到文件")
-                        }
-                        OutlinedButton(
-                            onClick = { importLauncher.launch(arrayOf("*/*")) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.FileDownload, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("从文件导入")
-                        }
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            pasteText = ""
-                            pasteError = null
-                            showPasteImport = true
-                        },
+                SectionCard("本地备份", "导出为 JSON 文件保存到手机或发给自己") {
+                    Button(
+                        onClick = { exportLauncher.launch(BackupData.defaultFileName()) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.ContentPaste, null, Modifier.size(18.dp))
+                        Icon(Icons.Default.FileUpload, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("粘贴 JSON 导入")
+                        Text("导出到文件")
                     }
-                    // 从别的倒数日应用搬家：截图 → AI → JSON → 上面两个导入入口
-                    TextButton(
-                        onClick = { showAiPrompt = true },
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("从其他应用迁移（AI 提示词）")
-                    }
+                    Text(
+                        "导入日程（含从其他应用迁移）已挪到菜单里的「导入日程」。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 // ── WebDAV ──
@@ -480,170 +423,21 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         )
     }
 
-    // ── 粘贴 JSON 导入 ──
-    if (showPasteImport) {
-        AlertDialog(
-            onDismissRequest = { showPasteImport = false },
-            icon = { Icon(Icons.Default.ContentPaste, null) },
-            title = { Text("粘贴 JSON 导入") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "把 AI 返回的 JSON 粘到这里即可，外面裹着的 ``` 代码块或前后多余的说明文字都不用删。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = pasteText,
-                        onValueChange = { pasteText = it; pasteError = null },
-                        placeholder = { Text("[{\"title\": \"房租\", \"date\": \"2026-10-01\"}]") },
-                        isError = pasteError != null,
-                        supportingText = pasteError?.let { { Text(it) } },
-                        textStyle = MaterialTheme.typography.bodySmall
-                            .copy(fontFamily = FontFamily.Monospace),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 140.dp, max = 260.dp)
-                    )
-                    TextButton(
-                        onClick = {
-                            // 剪贴板里通常正是刚从 AI 那边复制回来的内容，省一次长按粘贴
-                            clipboard.getText()?.text?.let { pasteText = it; pasteError = null }
-                        },
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.ContentPaste, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("从剪贴板粘贴")
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = pasteText.isNotBlank(),
-                    onClick = {
-                        BackupData.parse(pasteText)
-                            .onSuccess {
-                                showPasteImport = false
-                                pendingImport = it to "粘贴的内容"
-                            }
-                            // 失败留在对话框里就地报错，内容不清空，改两个字就能重试
-                            .onFailure { pasteError = it.message ?: "解析失败" }
-                    }
-                ) { Text("解析并导入") }
-            },
-            dismissButton = {
-                TextButton({ showPasteImport = false }) { Text("取消") }
-            }
-        )
-    }
-
-    // ── AI 迁移提示词 ──
-    if (showAiPrompt) {
-        AlertDialog(
-            onDismissRequest = { showAiPrompt = false },
-            icon = { Icon(Icons.Default.AutoAwesome, null) },
-            title = { Text("从其他应用迁移") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "把下面这段提示词连同旧应用的截图一起发给 AI，它会返回一段 JSON；" +
-                            "复制那段 JSON 回来，用「粘贴 JSON 导入」直接读进来即可，不必存成文件。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            BackupData.AI_PROMPT,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier
-                                // 提示词较长，限高后自己滚动，免得把按钮挤出屏幕
-                                .heightIn(max = 260.dp)
-                                .padding(10.dp)
-                                .verticalScroll(rememberScrollState())
-                        )
-                    }
-                    Text(
-                        "导入前建议先「导出到文件」备份一份，结果不理想可以随时覆盖导入还原。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(BackupData.AI_PROMPT))
-                    showAiPrompt = false
-                    // Android 13+ 系统自己会弹复制提示，这里再给一条应用内回执，
-                    // 低版本上它就是唯一的反馈
-                    report(true, "提示词已复制，粘贴给 AI 即可")
-                }) {
-                    Icon(Icons.Default.ContentCopy, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("复制提示词")
-                }
-            },
-            dismissButton = {
-                TextButton({ showAiPrompt = false }) { Text("关闭") }
-            }
-        )
-    }
-
-    // ── 导入方式确认 ──
+    // ── 导入方式确认（云端恢复用；本地导入已挪到「导入日程」）──
     pendingImport?.let { (events, from) ->
-        AlertDialog(
-            onDismissRequest = { pendingImport = null },
-            title = { Text("导入 ${events.size} 条日程") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("来源：$from", style = MaterialTheme.typography.bodySmall)
-                    BackupData.Mode.entries.forEach { mode ->
-                        Column {
-                            Text(mode.label, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                mode.desc,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingImport = null
-                    scope.launch {
-                        // 导入要写存储并重排全部闹钟，放到 IO 线程避免卡界面
-                        val r = withContext(Dispatchers.IO) {
-                            BackupData.applyImport(context, events, BackupData.Mode.MERGE)
-                        }
-                        viewModel.reload()
-                        report(true, "已合并导入：新增 ${r.added} 条，覆盖 ${r.updated} 条，共 ${r.total} 条")
-                    }
-                }) { Text("合并导入") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    pendingImport = null
-                    scope.launch {
-                        val r = withContext(Dispatchers.IO) {
-                            BackupData.applyImport(context, events, BackupData.Mode.REPLACE)
-                        }
-                        viewModel.reload()
-                        report(true, "已覆盖导入：当前共 ${r.total} 条日程")
-                    }
-                }) { Text("覆盖导入", color = MaterialTheme.colorScheme.error) }
-            }
+        ImportConfirmDialog(
+            events = events,
+            from = from,
+            viewModel = viewModel,
+            onDismiss = { pendingImport = null },
+            onDone = { ok, msg -> pendingImport = null; report(ok, msg) }
         )
     }
 }
 
 /** 带标题与说明的分区卡片 */
 @Composable
-private fun SectionCard(
+internal fun SectionCard(
     title: String,
     subtitle: String,
     content: @Composable ColumnScope.() -> Unit

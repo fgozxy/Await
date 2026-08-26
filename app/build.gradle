@@ -19,8 +19,8 @@ android {
         applicationId "io.github.fgozxy.await"
         minSdk 26
         targetSdk 34
-        versionCode 24
-        versionName "1.6.3"
+        versionCode 25
+        versionName "1.7.0"
     }
 
     signingConfigs {

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
+import io.github.fgozxy.await.data.GroupStore
 import io.github.fgozxy.await.notify.AlarmScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,57 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _events = MutableStateFlow(EventStore.load(app).sortedWithDefault())
     val events: StateFlow<List<Event>> = _events
+
+    /**
+     * 全部分组名：显式建过的 + 从日程里推导出来的，按名称排序。
+     *
+     * 两个来源缺一不可——只看日程，新建的空分组会立刻消失；只看存储，
+     * 导入进来的日程带的分组就认不出来。
+     */
+    private val _groups = MutableStateFlow(loadGroups())
+    val groups: StateFlow<List<String>> = _groups
+
+    /**
+     * 新建一个空分组。
+     *
+     * @return false = 名字为空，或该分组已经存在（大小写不敏感）
+     */
+    fun createGroup(name: String): Boolean {
+        val ctx = getApplication<Application>()
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        // 已经有日程用着这个名字，也算已存在——否则会建出一个看起来重复的分组
+        if (_groups.value.any { it.equals(trimmed, ignoreCase = true) }) return false
+        if (!GroupStore.add(ctx, trimmed)) return false
+        _groups.value = loadGroups()
+        return true
+    }
+
+    /**
+     * 把若干条日程一次性归到某个分组。
+     *
+     * @param group 目标分组名；空串表示移出分组（归为「未分组」）
+     * @return 实际改动的条数（本来就在该分组里的不计）
+     */
+    fun assignGroup(eventIds: Set<Long>, group: String): Int {
+        if (eventIds.isEmpty()) return 0
+        val ctx = getApplication<Application>()
+        val target = group.trim()
+        val list = EventStore.load(ctx)
+        var count = 0
+        for (i in list.indices) {
+            if (list[i].id in eventIds && list[i].group != target) {
+                list[i] = list[i].copy(groupName = target)
+                count++
+            }
+        }
+        if (count > 0) {
+            EventStore.save(ctx, list)
+            // 分组内容变了不影响闹钟，只需刷新列表
+            refresh()
+        }
+        return count
+    }
 
     /** 新增或更新（id 相同视为更新） */
     fun upsert(event: Event) {
@@ -59,11 +111,13 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteGroups(names: Set<String>, deleteEvents: Boolean): Int {
         if (names.isEmpty()) return 0
         val ctx = getApplication<Application>()
+        // 名字本身先删掉，否则空分组删完还留在列表里
+        GroupStore.remove(ctx, names)
         val list = EventStore.load(ctx)
 
         if (deleteEvents) {
             val doomed = list.filter { it.group in names }
-            if (doomed.isEmpty()) return 0
+            if (doomed.isEmpty()) { refresh(); return 0 }
             list.removeAll(doomed.toSet())
             EventStore.save(ctx, list)
             doomed.forEach { cancelAlarms(it.id) }
@@ -79,10 +133,8 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
                 count++
             }
         }
-        if (count > 0) {
-            EventStore.save(ctx, list)
-            refresh()
-        }
+        if (count > 0) EventStore.save(ctx, list)
+        refresh()
         return count
     }
 
@@ -98,6 +150,14 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun refresh() {
         _events.value = EventStore.load(getApplication()).sortedWithDefault()
+        _groups.value = loadGroups()
+    }
+
+    /** 显式建过的分组 + 日程里出现过的分组，去重排序 */
+    private fun loadGroups(): List<String> {
+        val ctx = getApplication<Application>()
+        val fromEvents = EventStore.load(ctx).map { it.group }.filter { it.isNotBlank() }
+        return (GroupStore.load(ctx) + fromEvents).distinct().sorted()
     }
 
     private fun List<Event>.sortedWithDefault() =

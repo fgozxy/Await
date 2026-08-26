@@ -19,10 +19,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
@@ -69,13 +71,20 @@ fun HomeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // 备份与恢复
+    // 备份与恢复 / 导入日程
     var showBackup by remember { mutableStateOf(false) }
+    var showImport by remember { mutableStateOf(false) }
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
     var selectedForDelete by remember { mutableStateOf(setOf<String>()) }
     var confirmDeleteGroups by remember { mutableStateOf<Set<String>?>(null) }
+    var newGroupName by remember { mutableStateOf("") }
+
+    // 批量分配：对话框开关 / 目标分组 / 勾选的日程 id
+    var showAssign by remember { mutableStateOf(false) }
+    var assignTarget by remember { mutableStateOf<String?>(null) }
+    var assignSelection by remember { mutableStateOf(setOf<Long>()) }
 
     // 分组筛选：null=全部，""=未分组，其他=指定分组名
     var selectedGroup by remember { mutableStateOf<String?>(null) }
@@ -83,8 +92,8 @@ fun HomeScreen(
     val matched = events.filter {
         query.isBlank() || it.title.contains(query, true) || it.note.contains(query, true)
     }
-    // 现有分组列表（保持稳定排序）
-    val existingGroups = events.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
+    // 现有分组列表：显式建过的空分组也在内，所以取 ViewModel 而不是从日程现推
+    val existingGroups by viewModel.groups.collectAsStateWithLifecycle()
     val hasUngrouped = events.any { it.group.isBlank() }
 
     val filtered = matched.filter {
@@ -148,6 +157,11 @@ fun HomeScreen(
                             leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
                         )
                         DropdownMenuItem(
+                            text = { Text("导入日程") },
+                            onClick = { menuOpen = false; showImport = true },
+                            leadingIcon = { Icon(Icons.Default.MoveToInbox, null) }
+                        )
+                        DropdownMenuItem(
                             text = { Text("备份与恢复") },
                             onClick = { menuOpen = false; showBackup = true },
                             leadingIcon = { Icon(Icons.Default.CloudSync, null) }
@@ -156,6 +170,16 @@ fun HomeScreen(
                             text = { Text("管理分组") },
                             onClick = { menuOpen = false; showManageGroups = true },
                             leadingIcon = { Icon(Icons.Default.Label, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("分配日程到分组") },
+                            onClick = {
+                                menuOpen = false
+                                assignTarget = null
+                                assignSelection = emptySet()
+                                showAssign = true
+                            },
+                            leadingIcon = { Icon(Icons.Default.DriveFileMove, null) }
                         )
                     }
                 }
@@ -259,15 +283,11 @@ fun HomeScreen(
 
     // ── 管理分组对话框（多选 + 全选）──
     if (showManageGroups) {
-        // 分组条目：名称 → 日程数。空串条目代表「未分组」，只在确实有未分组日程时出现
+        // 分组条目：名称 → 日程数。空串条目代表「未分组」，只在确实有未分组日程时出现。
+        // 名称取自 existingGroups 而不是现推，这样刚建的空分组（0 条）也会列出来
+        val counts = events.filter { it.group.isNotBlank() }.groupingBy { it.group }.eachCount()
         val groupEntries = buildList {
-            addAll(
-                events.filter { it.group.isNotBlank() }
-                    .groupingBy { it.group }
-                    .eachCount()
-                    .toList()
-                    .sortedBy { it.first }
-            )
+            addAll(existingGroups.map { it to (counts[it] ?: 0) })
             if (hasUngrouped) add("" to events.count { it.group.isBlank() })
         }
         val allNames = groupEntries.map { it.first }.toSet()
@@ -275,16 +295,45 @@ fun HomeScreen(
         fun closeManage() {
             showManageGroups = false
             selectedForDelete = emptySet()
+            newGroupName = ""
+        }
+
+        fun submitNewGroup() {
+            val name = newGroupName.trim()
+            if (name.isEmpty()) return
+            if (viewModel.createGroup(name)) {
+                newGroupName = ""
+                Toast.makeText(context, "已新建分组「$name」", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "分组「$name」已存在", Toast.LENGTH_SHORT).show()
+            }
         }
 
         AlertDialog(
             onDismissRequest = { closeManage() },
             title = { Text("管理分组") },
             text = {
-                if (groupEntries.isEmpty()) {
-                    Text("暂无分组", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Column {
+                Column {
+                    // 新建分组：让「新建/编辑倒数日」不再是唯一入口，
+                    // 也允许先把分组建好、之后再往里放日程
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newGroupName,
+                            onValueChange = { newGroupName = it },
+                            label = { Text("新建分组") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilledTonalButton(
+                            onClick = { submitNewGroup() },
+                            enabled = newGroupName.isBlank().not()
+                        ) { Text("添加") }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    if (groupEntries.isEmpty()) {
+                        Text("暂无分组", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
                         // 全选行：部分勾选时显示为不确定态
                         val allState = when (selectedForDelete.size) {
                             0 -> ToggleableState.Off
@@ -361,6 +410,162 @@ fun HomeScreen(
         )
     }
 
+    // ── 分配日程到分组（多选 + 全选）──
+    // 两步走：先选目标分组，再勾日程。合在一屏里会让本来就不宽的对话框挤成一团
+    if (showAssign) {
+        fun closeAssign() {
+            showAssign = false
+            assignTarget = null
+            assignSelection = emptySet()
+        }
+
+        val target = assignTarget
+        val targetLabel = target?.let { if (it.isBlank()) "未分组" else it } ?: ""
+
+        AlertDialog(
+            onDismissRequest = { closeAssign() },
+            title = { Text(if (target == null) "分配到哪个分组" else "选择日程 → 「$targetLabel」") },
+            text = {
+                if (target == null) {
+                    Column(
+                        Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        if (existingGroups.isEmpty()) {
+                            Text(
+                                "还没有分组。可以先到「管理分组」里新建一个，" +
+                                    "或者把日程移出分组。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        existingGroups.forEach { name ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { assignTarget = name }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Label, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(name, Modifier.weight(1f))
+                                Text(
+                                    "${events.count { it.group == name }} 条",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { assignTarget = "" }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Close, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("未分组（把日程移出分组）", Modifier.weight(1f))
+                        }
+                    }
+                } else if (events.isEmpty()) {
+                    Text("还没有日程", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Column {
+                        val allIds = events.map { it.id }.toSet()
+                        val allState = when (assignSelection.size) {
+                            0 -> ToggleableState.Off
+                            allIds.size -> ToggleableState.On
+                            else -> ToggleableState.Indeterminate
+                        }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .triStateToggleable(allState) {
+                                    assignSelection =
+                                        if (allState == ToggleableState.On) emptySet() else allIds
+                                },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TriStateCheckbox(state = allState, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("全选", Modifier.weight(1f))
+                            Text(
+                                "${events.size} 条日程",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        HorizontalDivider()
+                        Column(
+                            Modifier.verticalScroll(rememberScrollState()).heightIn(max = 320.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            events.forEach { event ->
+                                val checked = event.id in assignSelection
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .toggleable(value = checked) { on ->
+                                            assignSelection =
+                                                if (on) assignSelection + event.id
+                                                else assignSelection - event.id
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(checked = checked, onCheckedChange = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            event.title,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            // 已经在目标分组里的标出来，免得白勾一遍
+                                            if (event.group == target) "已在此分组"
+                                            else if (event.group.isBlank()) "未分组"
+                                            else event.group,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (target != null) {
+                    TextButton(
+                        enabled = assignSelection.isNotEmpty(),
+                        onClick = {
+                            val n = viewModel.assignGroup(assignSelection, target)
+                            closeAssign()
+                            Toast.makeText(
+                                context,
+                                if (n > 0) "已把 $n 条日程分配到「$targetLabel」" else "所选日程本来就在该分组",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    ) { Text("分配（${assignSelection.size}）") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    // 选完分组还能退回上一步换一个，不用整个重开
+                    if (target != null) { assignTarget = null; assignSelection = emptySet() }
+                    else closeAssign()
+                }) { Text(if (target != null) "上一步" else "取消") }
+            }
+        )
+    }
+
     // 批量删除二次确认
     confirmDeleteGroups?.let { sel ->
         val affected = events.count { it.group in sel }
@@ -377,7 +582,7 @@ fun HomeScreen(
             title = { Text("删除 ${sel.size} 个分组？") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("$names 共 $affected 条日程。")
+                    Text(if (affected == 0) "$names 下暂无日程。" else "$names 共 $affected 条日程。")
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -415,7 +620,12 @@ fun HomeScreen(
                     showManageGroups = false
                     Toast.makeText(
                         context,
-                        if (deleteEvents) "已删除 $n 条日程" else "已将 $n 条日程移出分组",
+                        // 空分组删掉时 n 为 0，报「已删除 0 条日程」会让人以为没删掉
+                        when {
+                            n == 0 -> "已删除 ${sel.size} 个分组"
+                            deleteEvents -> "已删除 $n 条日程"
+                            else -> "已将 $n 条日程移出分组"
+                        },
                         Toast.LENGTH_SHORT
                     ).show()
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
@@ -429,6 +639,11 @@ fun HomeScreen(
     // ── 备份与恢复 ──
     if (showBackup) {
         BackupScreen(viewModel = viewModel, onDismiss = { showBackup = false })
+    }
+
+    // ── 导入日程 ──
+    if (showImport) {
+        ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
     }
 }
 
