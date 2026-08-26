@@ -39,13 +39,6 @@
 - **云端历史版本**：按时间保留最近 N 份，随时挑一份恢复
 - 错过的备份（关机等）会在下次启动时自动补做，失败会有低打扰通知
 
-### ⬆️ 应用内更新
-- 检查 GitHub Release → 下载 → 拉起系统安装器，全程可取消
-- **后台静默更新**：打开应用时静默检查并下载新版，下好了发一条通知，点一下直接进安装页
-- **镜像自动回退**：直连 GitHub 不通时依次尝试镜像，国内网络也能正常更新
-- **安装前验签**：比对安装包与已安装应用的签名证书，不一致直接拒绝——走镜像意味着安装包经过第三方之手，这道校验是必须的
-- 下载全程有超时与完整性校验，不会卡在「下载中」；安装包经 FileProvider 授权给系统安装器
-
 ### 🐳 自建 WebDAV（可选）
 不想把备份放在第三方网盘的，`docker/` 目录里有一套开箱即用的自建方案：一条
 `docker compose --profile https up -d` 起一个 Apache `mod_dav` 服务，Caddy 自动签发
@@ -61,12 +54,10 @@ Let's Encrypt 证书，备份直接落在自己 VPS 的磁盘上。详见 [docke
 | 存储 | Gson + SharedPreferences（轻量数据） |
 | 提醒 | AlarmManager 精确闹钟 + BroadcastReceiver + 前台服务响铃 |
 | 备份 | 自研极简 WebDAV 客户端（HttpURLConnection，零依赖） |
-| 更新 | GitHub Releases API + FileProvider 安装 |
 
 ## 📦 构建
 
 ```bash
-git clone https://github.com/fgozxy/Await.git
 cd Await
 ./gradlew assembleDebug      # 调试版
 ./gradlew assembleRelease    # 正式版（需签名配置）

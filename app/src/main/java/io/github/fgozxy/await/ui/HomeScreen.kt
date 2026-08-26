@@ -24,8 +24,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,11 +39,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.theme.EventColors
-import io.github.fgozxy.await.update.UpdateManager
 import io.github.fgozxy.await.vm.EventViewModel
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import java.io.File
 import java.time.LocalDate
 import android.widget.Toast
 
@@ -63,8 +58,6 @@ fun HomeScreen(
     showFullScreenBanner: Boolean = false,
     onRequestFullScreen: () -> Unit = {},
     onTestNotification: () -> Unit = {},
-    autoUpdateEnabled: Boolean = true,
-    onToggleAutoUpdate: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -73,17 +66,8 @@ fun HomeScreen(
     var editing by remember { mutableStateOf<Event?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Event?>(null) }
-    // ── 应用内更新状态 ──
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val curVersion = remember { UpdateManager.currentVersion(context) }
-    var checkingUpdate by remember { mutableStateOf(false) }
-    var updateInfo by remember { mutableStateOf<UpdateManager.UpdateInfo?>(null) }
-    // 下载状态：downloading=是否在下载中；progress 为 0~99，-1 表示服务器没给总长度
-    var downloading by remember { mutableStateOf(false) }
-    var downloadProgress by remember { mutableStateOf(0) }
-    var downloadedApk by remember { mutableStateOf<File?>(null) }
-    var downloadJob by remember { mutableStateOf<Job?>(null) }
 
     // 备份与恢复
     var showBackup by remember { mutableStateOf(false) }
@@ -162,40 +146,6 @@ fun HomeScreen(
                             text = { Text("发送测试通知") },
                             onClick = { menuOpen = false; onTestNotification() },
                             leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (checkingUpdate) "正在检查…" else "检查更新（当前 v$curVersion）") },
-                            enabled = !checkingUpdate,
-                            onClick = {
-                                menuOpen = false
-                                checkingUpdate = true
-                                scope.launch {
-                                    val result = UpdateManager.checkLatest(curVersion)
-                                    checkingUpdate = false
-                                    result.onSuccess { info ->
-                                        updateInfo = info
-                                        if (info == null)
-                                            Toast.makeText(context, "已是最新版本 ✅", Toast.LENGTH_SHORT).show()
-                                    }.onFailure {
-                                        Toast.makeText(
-                                            context,
-                                            "检查更新失败：${it.message}", Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.SystemUpdateAlt, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("自动更新") },
-                            onClick = { onToggleAutoUpdate(!autoUpdateEnabled) },
-                            leadingIcon = { Icon(Icons.Default.Sync, null) },
-                            trailingIcon = {
-                                Switch(
-                                    checked = autoUpdateEnabled,
-                                    onCheckedChange = { onToggleAutoUpdate(it) }
-                                )
-                            }
                         )
                         DropdownMenuItem(
                             text = { Text("备份与恢复") },
@@ -479,107 +429,6 @@ fun HomeScreen(
     // ── 备份与恢复 ──
     if (showBackup) {
         BackupScreen(viewModel = viewModel, onDismiss = { showBackup = false })
-    }
-
-    // ── 应用内更新对话框 ──
-    updateInfo?.let { info ->
-        val ready = downloadedApk != null && !downloading
-
-        fun closeUpdate() {
-            downloadJob?.cancel()
-            downloadJob = null
-            downloading = false
-            downloadedApk = null
-            updateInfo = null
-        }
-
-        AlertDialog(
-            onDismissRequest = { if (!downloading) closeUpdate() },
-            title = { Text("发现新版本 ${info.versionName}") },
-            text = {
-                Column {
-                    Text(
-                        info.notes.take(600).ifBlank { "性能优化与问题修复" },
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 10,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (info.sizeText().isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "安装包大小：${info.sizeText()}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (downloading) {
-                        Spacer(Modifier.height(12.dp))
-                        if (downloadProgress >= 0) {
-                            LinearProgressIndicator(
-                                progress = { (downloadProgress / 100f).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else {
-                            LinearProgressIndicator(Modifier.fillMaxWidth())
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            if (downloadProgress >= 0) "下载中 $downloadProgress%" else "下载中…",
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    } else if (ready) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("下载完成，点「安装」继续", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !downloading,
-                    onClick = {
-                        // Android 8+ 需先授予「安装未知应用」权限
-                        if (!UpdateManager.canInstall(context)) {
-                            UpdateManager.gotoInstallPermission(context)
-                            return@TextButton
-                        }
-                        val apk = downloadedApk
-                        if (apk != null) {
-                            UpdateManager.installApk(context, apk)
-                            return@TextButton
-                        }
-                        downloading = true
-                        downloadProgress = 0
-                        downloadJob = scope.launch {
-                            val r = UpdateManager.downloadApk(context, info) { p ->
-                                downloadProgress = p
-                            }
-                            downloading = false
-                            downloadJob = null
-                            r.onSuccess { file ->
-                                downloadedApk = file
-                                if (UpdateManager.installApk(context, file)) closeUpdate()
-                            }.onFailure {
-                                Toast.makeText(context, "下载失败：${it.message}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
-                ) {
-                    Text(if (ready) "安装" else "下载并安装")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    if (downloading) {
-                        // 取消只中断下载，对话框留着，可以直接重试
-                        downloadJob?.cancel()
-                        downloadJob = null
-                        downloading = false
-                    } else closeUpdate()
-                }) {
-                    Text(if (downloading) "取消下载" else "以后再说")
-                }
-            }
-        )
     }
 }
 

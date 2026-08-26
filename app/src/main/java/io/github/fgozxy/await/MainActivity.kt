@@ -13,13 +13,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
-import androidx.lifecycle.lifecycleScope
 import io.github.fgozxy.await.notify.AlarmScheduler
 import io.github.fgozxy.await.notify.NotificationHelper
 import io.github.fgozxy.await.ui.HomeScreen
-import io.github.fgozxy.await.update.AutoUpdate
-import io.github.fgozxy.await.update.UpdateManager
-import kotlinx.coroutines.launch
 import io.github.fgozxy.await.ui.theme.AwaitTheme
 import io.github.fgozxy.await.vm.EventViewModel
 
@@ -32,7 +28,6 @@ class MainActivity : ComponentActivity() {
     private val notifOk = mutableStateOf(true)
     private val battOptOk = mutableStateOf(true)
     private val fullScreenOk = mutableStateOf(true)
-    private val autoUpdateOn by lazy { mutableStateOf(AutoUpdate.isEnabled(this)) }
 
     /** Android 13+ 通知运行时权限 */
     private val notifPermission =
@@ -51,16 +46,6 @@ class MainActivity : ComponentActivity() {
         ) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-
-        // 装完新版后把待装记录和残留安装包清掉，免得反复提示。
-        // 注意只在确实已装上时清通知——否则用户随手打开一次应用，
-        // 那条「已准备好」的通知就没了，而它是唯一的安装入口。
-        AutoUpdate.clearIfInstalled(this)
-        if (AutoUpdate.readyApk(this) == null) NotificationHelper.cancelUpdateReady(this)
-        handleInstallIntent(intent)
-
-        // 后台静默检查并下载新版；失败无声无息，下次打开再试
-        lifecycleScope.launch { runCatching { AutoUpdate.runSilently(this@MainActivity) } }
 
         setContent {
             AwaitTheme {
@@ -84,35 +69,10 @@ class MainActivity : ComponentActivity() {
                     onRequestBatt = { requestIgnoreBatteryOptimization() },
                     showFullScreenBanner = !fullScreenOk.value,
                     onRequestFullScreen = { requestFullScreenIntentPermission() },
-                    onTestNotification = { NotificationHelper.showTestNotification(this) },
-                    autoUpdateEnabled = autoUpdateOn.value,
-                    onToggleAutoUpdate = {
-                        autoUpdateOn.value = it
-                        AutoUpdate.setEnabled(this, it)
-                    }
+                    onTestNotification = { NotificationHelper.showTestNotification(this) }
                 )
             }
         }
-    }
-
-    /** 通知点进来时带着安装包路径：先确认安装权限，再拉起系统安装器 */
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleInstallIntent(intent)
-    }
-
-    private fun handleInstallIntent(intent: Intent?) {
-        if (intent?.action != ACTION_INSTALL_UPDATE) return
-        val path = intent.getStringExtra(EXTRA_APK_PATH) ?: return
-        val apk = java.io.File(path)
-        if (!apk.isFile) return
-        NotificationHelper.cancelUpdateReady(this)
-        if (!UpdateManager.canInstall(this)) {
-            UpdateManager.gotoInstallPermission(this)
-            return
-        }
-        UpdateManager.installApk(this, apk)
     }
 
     override fun onResume() {
@@ -179,7 +139,5 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_EVENT_ID = "extra_event_id"
-        const val ACTION_INSTALL_UPDATE = "io.github.fgozxy.await.ACTION_INSTALL_UPDATE"
-        const val EXTRA_APK_PATH = "extra_apk_path"
     }
 }

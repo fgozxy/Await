@@ -29,9 +29,6 @@ object NotificationHelper {
     const val CHANNEL_EVENTS = "event_reminders"
     const val CHANNEL_BACKUP = "backup"
 
-    /** 后台更新下载完成的提示 */
-    const val CHANNEL_UPDATE = "update_v1"
-
     /**
      * 闹钟渠道。带 `_v1` 后缀是必须的：渠道属性一旦创建就不可再改，
      * 复用老的 event_reminders 就没法把系统提示音关掉（我们要自己播放循环铃声）。
@@ -89,18 +86,13 @@ object NotificationHelper {
         )
         nm.createNotificationChannel(
             NotificationChannel(
-                CHANNEL_UPDATE,
-                "应用更新",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply { description = "新版本在后台下载完成后提示安装" }
-        )
-        nm.createNotificationChannel(
-            NotificationChannel(
                 CHANNEL_BACKUP,
                 "备份提醒",
                 NotificationManager.IMPORTANCE_LOW
             ).apply { description = "定时 WebDAV 备份失败时提示" }
         )
+        // 应用内更新已移除；老版本建过的渠道在升级后清掉，免得空挂在系统设置里
+        nm.deleteNotificationChannel(LEGACY_CHANNEL_UPDATE)
     }
 
     private fun canNotify(context: Context): Boolean =
@@ -292,44 +284,14 @@ object NotificationHelper {
 
     private fun requestCode(eventId: Long, salt: Int): Int = eventId.toInt() xor salt
 
-    /**
-     * 后台已把新版下好，提示点击安装。
-     *
-     * 点击走 MainActivity 而不是直接把安装 Intent 塞进 PendingIntent：
-     * 安装前要先确认「允许安装未知应用」这项授权，交给 Activity 处理才能在
-     * 未授权时把用户引到授权页，而不是弹一个失败的安装器。
-     */
-    // canNotify() 已挡在前面，lint 看不穿这层守卫
-    @SuppressLint("MissingPermission")
-    fun showUpdateReady(context: Context, versionName: String, apk: java.io.File) {
-        if (!canNotify(context)) return
-        val pi = PendingIntent.getActivity(
-            context, 10088,
-            Intent(context, MainActivity::class.java)
-                .setAction(MainActivity.ACTION_INSTALL_UPDATE)
-                .putExtra(MainActivity.EXTRA_APK_PATH, apk.absolutePath)
-                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(context, CHANNEL_UPDATE)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Await $versionName 已准备好")
-            .setContentText("新版本已在后台下载完成，点击安装")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "新版本已在后台下载完成，点击安装。\n安装不会影响已有日程数据。"
-            ))
-            .setContentIntent(pi)
-            .addAction(0, "立即安装", pi)
-            .setAutoCancel(true)
-            .build()
-        NotificationManagerCompat.from(context).notify(NOTIF_UPDATE_READY, notification)
-    }
+    /** 老版本「更新已下好」通知与它的渠道；只用于升级后清理 */
+    private const val LEGACY_CHANNEL_UPDATE = "update_v1"
+    private const val LEGACY_NOTIF_UPDATE_READY = 10088
 
-    fun cancelUpdateReady(context: Context) {
-        NotificationManagerCompat.from(context).cancel(NOTIF_UPDATE_READY)
+    /** 清掉老版本可能还挂在通知栏上的「更新已准备好」 */
+    fun cancelLegacyUpdateNotification(context: Context) {
+        NotificationManagerCompat.from(context).cancel(LEGACY_NOTIF_UPDATE_READY)
     }
-
-    private const val NOTIF_UPDATE_READY = 10088
 
     /**
      * 立即发送一条测试通知，用于验证通知链路（权限 / 渠道 / 省电策略）是否正常。
