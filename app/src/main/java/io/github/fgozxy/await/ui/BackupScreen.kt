@@ -388,8 +388,8 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
             text = {
                 Column(
                     Modifier
-                        .verticalScroll(rememberScrollState())
-                        .heightIn(max = 380.dp),
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     files.forEach { entry ->

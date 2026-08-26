@@ -360,7 +360,7 @@ fun HomeScreen(
                         }
                         HorizontalDivider()
                         Column(
-                            Modifier.verticalScroll(rememberScrollState()).heightIn(max = 320.dp),
+                            Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             groupEntries.forEach { (name, count) ->
@@ -428,7 +428,7 @@ fun HomeScreen(
             text = {
                 if (target == null) {
                     Column(
-                        Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp),
+                        Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         if (existingGroups.isEmpty()) {
@@ -501,7 +501,7 @@ fun HomeScreen(
                         }
                         HorizontalDivider()
                         Column(
-                            Modifier.verticalScroll(rememberScrollState()).heightIn(max = 320.dp),
+                            Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             events.forEach { event ->
