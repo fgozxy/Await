@@ -52,15 +52,6 @@ import android.widget.Toast
 @Composable
 fun HomeScreen(
     viewModel: EventViewModel,
-    showExactAlarmBanner: Boolean,
-    onRequestExactAlarm: () -> Unit,
-    showNotifBanner: Boolean = false,
-    onRequestNotif: () -> Unit = {},
-    showBattBanner: Boolean = false,
-    onRequestBatt: () -> Unit = {},
-    showFullScreenBanner: Boolean = false,
-    onRequestFullScreen: () -> Unit = {},
-    onTestNotification: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
@@ -75,6 +66,8 @@ fun HomeScreen(
     // 备份与恢复 / 导入日程
     var showBackup by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
+    var showTelegram by remember { mutableStateOf(false) }
+    val syncStatus = rememberSyncStatus()
     var showUnifiedNotify by remember { mutableStateOf(false) }
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
@@ -105,7 +98,7 @@ fun HomeScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 左滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和它的闹钟一起回来
+    // 左滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和服务器提醒一起恢复
     fun deleteWithUndo(event: Event) {
         viewModel.delete(event.id)
         scope.launch {
@@ -154,8 +147,8 @@ fun HomeScreen(
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text("发送测试通知") },
-                            onClick = { menuOpen = false; onTestNotification() },
+                            text = { Text("Telegram 服务器") },
+                            onClick = { menuOpen = false; showTelegram = true },
                             leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
                         )
                         DropdownMenuItem(
@@ -174,7 +167,7 @@ fun HomeScreen(
                             leadingIcon = { Icon(Icons.Default.Label, null) }
                         )
                         DropdownMenuItem(
-                            text = { Text("统一通知") },
+                            text = { Text("合并 Telegram 推送") },
                             onClick = { menuOpen = false; showUnifiedNotify = true },
                             leadingIcon = { Icon(Icons.Default.NotificationsPaused, null) }
                         )
@@ -201,32 +194,7 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            if (showNotifBanner) {
-                HealthBanner(
-                    "通知权限被关闭，提醒将无法显示",
-                    "去开启", onRequestNotif,
-                    container = MaterialTheme.colorScheme.errorContainer
-                )
-            }
-            if (showExactAlarmBanner) {
-                HealthBanner(
-                    "未授予精确闹钟权限，提醒可能延迟",
-                    "去授权", onRequestExactAlarm
-                )
-            }
-            if (showFullScreenBanner) {
-                HealthBanner(
-                    "未授予全屏提醒权限，闹钟到点可能不会弹出",
-                    "去授权", onRequestFullScreen,
-                    container = MaterialTheme.colorScheme.errorContainer
-                )
-            }
-            if (showBattBanner) {
-                HealthBanner(
-                    "建议加入电池优化白名单，防止后台提醒被拦截",
-                    "去设置", onRequestBatt
-                )
-            }
+            HealthBanner(syncStatus, "设置", { showTelegram = true })
             if (filtered.isEmpty() && (query.isNotBlank() || selectedGroup != null)) {
                 // 搜索/筛选无结果
                 Column(
@@ -652,6 +620,8 @@ fun HomeScreen(
     if (showImport) {
         ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
     }
+
+    if (showTelegram) TelegramScreen(onDismiss = { showTelegram = false })
 
     // ── 统一通知 ──
     if (showUnifiedNotify) {

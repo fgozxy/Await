@@ -7,12 +7,12 @@ import io.github.fgozxy.await.data.EventStore
 import io.github.fgozxy.await.data.GroupStore
 import io.github.fgozxy.await.data.MergeGroup
 import io.github.fgozxy.await.data.MergeStore
-import io.github.fgozxy.await.notify.AlarmScheduler
+import io.github.fgozxy.await.sync.SyncCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 日程仓库视图模型：持有日程列表状态，写操作即时持久化并同步闹钟。
+ * 日程仓库视图模型：持有日程列表状态，写操作即时持久化并同步服务器日程。
  */
 class EventViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -68,7 +68,7 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (count > 0) {
             EventStore.save(ctx, list)
-            // 分组内容变了不影响闹钟，只需刷新列表
+            // 分组内容变了不影响提醒时刻，只需刷新列表
             refresh()
         }
         return count
@@ -81,13 +81,17 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun mergeNotifications(eventIds: Set<Long>): Boolean {
         val created = MergeStore.merge(getApplication(), eventIds) != null
-        if (created) _mergeGroups.value = loadMergeGroups()
+        if (created) {
+            _mergeGroups.value = loadMergeGroups()
+            SyncCoordinator.changed(getApplication())
+        }
         return created
     }
 
     /** 解散一个合并通知组 */
     fun unmergeNotifications(groupId: Long) {
         MergeStore.unmerge(getApplication(), groupId)
+        SyncCoordinator.changed(getApplication())
         _mergeGroups.value = loadMergeGroups()
     }
 
@@ -98,7 +102,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         val idx = list.indexOfFirst { it.id == event.id }
         if (idx >= 0) list[idx] = event else list.add(event)
         EventStore.save(ctx, list)
-        AlarmScheduler.scheduleEvent(ctx, event)
         refresh()
     }
 
@@ -107,7 +110,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         val list = EventStore.load(ctx)
         list.removeAll { it.id == eventId }
         EventStore.save(ctx, list)
-        cancelAlarms(eventId)
         refresh()
     }
 
@@ -126,7 +128,7 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
      * 批量删除分组。
      *
      * @param names 要删除的分组名；空串 `""` 代表「未分组」这个默认分组
-     * @param deleteEvents true = 连同分组下的日程一起删除，并取消它们的闹钟；
+     * @param deleteEvents true = 连同分组下的日程一起删除，并同步删除服务器上的提醒；
      *                     false = 仅把日程移出分组、日程本身保留
      *                     （此时空串是空操作——未分组的日程没有分组可移出）
      * @return 受影响的日程条数
@@ -143,7 +145,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
             if (doomed.isEmpty()) { refresh(); return 0 }
             list.removeAll(doomed.toSet())
             EventStore.save(ctx, list)
-            doomed.forEach { cancelAlarms(it.id) }
             refresh()
             return doomed.size
         }
@@ -159,13 +160,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         if (count > 0) EventStore.save(ctx, list)
         refresh()
         return count
-    }
-
-    /** 取消一条日程的全部闹钟：周期闹钟 + 可能挂着的「稍后提醒」 */
-    private fun cancelAlarms(eventId: Long) {
-        val ctx = getApplication<Application>()
-        AlarmScheduler.cancel(ctx, eventId)
-        AlarmScheduler.cancelSnooze(ctx, eventId)
     }
 
     /** 外部（导入 / 云端恢复）直接改动了存储后，用它把列表刷成最新 */

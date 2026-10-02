@@ -49,15 +49,7 @@ data class Event(
     val repeatEveryDays: Int = 0,
     val repeatYearly: Boolean = false,
     /** 自定义分组名（如「订阅」「生日」），null/空串表示未分组 */
-    val groupName: String? = null,
-    /**
-     * 闹钟式提醒：到点后持续响铃 + 震动，不手动关闭就一直响。
-     *
-     * 用可空布尔而不是 `Boolean = true`：老数据的 JSON 里没有这个字段，
-     * 可空 + 计算属性是唯一与 Gson 的对象构造方式无关的写法（本项目已经
-     * 因为字段反序列化丢过一次全量数据，见上方 `repeat` 的注释）。
-     */
-    val alarmMode: Boolean? = null
+    val groupName: String? = null
 ) {
     /**
      * 当前循环配置（每次访问即时解析，兼容三代数据格式）。
@@ -74,9 +66,6 @@ data class Event(
 
     /** 分组名的空安全版本；未分组返回空串 */
     val group: String get() = groupName ?: ""
-
-    /** 闹钟模式的空安全版本；老数据（null）一律视为开启 */
-    val isAlarmMode: Boolean get() = alarmMode ?: true
 
     /** 目标日期 */
     val date: LocalDate get() = LocalDate.ofEpochDay(dateEpochDay)
@@ -240,7 +229,7 @@ object EventStore {
         })
         .create()
 
-    fun load(context: Context): MutableList<Event> {
+    fun load(context: Context, failOnUnreadable: Boolean = false): MutableList<Event> {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val json = sp.getString(KEY, null) ?: return mutableListOf()
         val list = runCatching {
@@ -252,17 +241,19 @@ object EventStore {
             if (sp.getString(KEY_SALVAGE, null) == null) {
                 sp.edit().putString(KEY_SALVAGE, json).apply()
             }
+            if (failOnUnreadable) error("日程数据无法解析，已暂停同步以保留服务器日程")
             return mutableListOf()
         }
-        // 清掉无法解析的坏数据并修正越界/null 字段，防止启动后在 UI 或闹钟调度中崩溃
+        // 清掉无法解析的坏数据并修正越界/null 字段，防止启动后在 UI 或日程同步中崩溃
         return list.mapNotNull { raw ->
             raw?.sanitized()?.takeIf { it.title.isNotBlank() }
         }.toMutableList()
     }
 
-    fun save(context: Context, events: List<Event>) {
+    fun save(context: Context, events: List<Event>) = synchronized(io.github.fgozxy.await.sync.SyncCoordinator.lock) {
         val safe = events.map { it.sanitized() }.filter { it.title.isNotBlank() }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY, gson.toJson(safe)).apply()
+        check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY, gson.toJson(safe)).commit())
+        io.github.fgozxy.await.sync.SyncCoordinator.changed(context)
     }
 }

@@ -8,7 +8,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
-import io.github.fgozxy.await.notify.AlarmScheduler
+import io.github.fgozxy.await.sync.SyncCoordinator
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -244,7 +244,7 @@ object BackupData {
     /** `2026-10-01` / `2026/10/1` / `2026.10.01` / `2026-10-01T09:00` 都能命中 */
     private val DATE_PATTERN = Regex("""^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})""")
 
-    /** 把解析出的日程写回本地，并重排全部闹钟 */
+    /** 把解析出的日程写回本地，并同步服务器日程 */
     fun applyImport(
         context: Context,
         incoming: List<Event>,
@@ -253,8 +253,6 @@ object BackupData {
         incomingMergeGroups: List<MergeGroup>? = null
     ): ImportResult {
         val current = EventStore.load(context)
-        // 旧闹钟一律先取消，避免被删掉/被覆盖的日程留下孤儿闹钟
-        current.forEach { AlarmScheduler.cancel(context, it.id) }
 
         val result: List<Event>
         var added = 0
@@ -290,7 +288,7 @@ object BackupData {
             replace = mode == Mode.REPLACE,
             events = stored
         )
-        AlarmScheduler.scheduleAll(context)
+        SyncCoordinator.changed(context)
         return ImportResult(added, updated, result.size)
     }
 }

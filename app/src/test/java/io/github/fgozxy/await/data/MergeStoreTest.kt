@@ -10,13 +10,12 @@ import java.time.LocalDate
 class MergeStoreTest {
 
     @Test
-    fun compatibilityRequiresSameDateTimeOffsetsAndMode() {
-        val base = event(1, LocalDate.of(2026, 10, 1), 9, listOf(0), true)
+    fun compatibilityRequiresSameDateTimeAndOffsets() {
+        val base = event(1, LocalDate.of(2026, 10, 1), 9, listOf(0))
 
         assertTrue(MergeStore.areCompatible(listOf(base, base.copy(id = 2))))
         assertFalse(MergeStore.areCompatible(listOf(base, base.copy(id = 2, remindHour = 10))))
         assertFalse(MergeStore.areCompatible(listOf(base, base.copy(id = 2, remindDaysBefore = listOf(7)))))
-        assertFalse(MergeStore.areCompatible(listOf(base, base.copy(id = 2, alarmMode = false))))
         assertFalse(
             MergeStore.areCompatible(
                 listOf(base, base.copy(id = 2, dateEpochDay = LocalDate.of(2026, 10, 2).toEpochDay()))
@@ -67,14 +66,12 @@ class MergeStoreTest {
         id: Long,
         date: LocalDate,
         hour: Int = 9,
-        offsets: List<Int> = listOf(0),
-        alarm: Boolean = true
+        offsets: List<Int> = listOf(0)
     ) = Event(
         id = id,
         title = "日程$id",
         dateEpochDay = date.toEpochDay(),
         remindDaysBefore = offsets,
-        remindHour = hour,
-        alarmMode = alarm
+        remindHour = hour
     )
 }

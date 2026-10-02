@@ -59,9 +59,6 @@ fun EditEventSheet(
     }
     var remindHour by remember { mutableIntStateOf(initial?.remindHour ?: 9) }
     var remindMinute by remember { mutableIntStateOf(initial?.remindMinute ?: 0) }
-    // 新建日程默认开启闹钟式提醒；老数据（alarmMode 为 null）同样视为开启
-    var alarmMode by remember { mutableStateOf(initial?.isAlarmMode ?: true) }
-
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
@@ -230,7 +227,7 @@ fun EditEventSheet(
 
             // 提醒设置
             Column {
-                Text("提醒时机（可多选）", style = MaterialTheme.typography.labelMedium)
+                Text("Telegram 推送时机（可多选，全部取消则不提醒）", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     REMIND_OPTIONS.forEach { (days, label) ->
@@ -261,12 +258,7 @@ fun EditEventSheet(
                         Text("点击选择", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                ToggleRow(
-                    label = "闹钟式提醒",
-                    checked = alarmMode,
-                    subtitle = "到点持续响铃震动，不手动关闭就一直响"
-                ) { alarmMode = it }
+                Text("提醒将由服务器推送到 Telegram", style = MaterialTheme.typography.bodySmall)
             }
 
             // 操作按钮
@@ -293,12 +285,11 @@ fun EditEventSheet(
                                 note = note.trim(),
                                 pinned = pinned,
                                 colorIndex = colorIndex,
-                                remindDaysBefore = (remindDays.ifEmpty { setOf(0) }).toList().sorted(),
+                                remindDaysBefore = remindDays.toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
                                 repeatSpec = if (cycle == Cycle.NONE) null else "${cycle.name}:$repN",
-                                groupName = group.trim(),
-                                alarmMode = alarmMode
+                                groupName = group.trim()
                             )
                         )
                     },

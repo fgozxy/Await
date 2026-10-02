@@ -15,8 +15,7 @@ data class MergeKey(
     val occurrenceEpochDay: Long,
     val remindDaysBefore: List<Int>,
     val remindHour: Int,
-    val remindMinute: Int,
-    val alarmMode: Boolean
+    val remindMinute: Int
 )
 
 /** 合并通知的分组表。 */
@@ -24,11 +23,6 @@ object MergeStore {
 
     private const val PREFS = "await_merge"
     private const val KEY_GROUPS = "groups"
-    private const val KEY_FIRED = "fired_at"
-
-    /** 同组去重窗口：同一触发点的成员在这段时间内重复到达只算一次。 */
-    const val ALERT_WINDOW_MS = 2 * 60 * 1000L
-
     private val gson = Gson()
 
     /** 日程当前的提醒签名；没有任何提醒时不能加入统一通知组。 */
@@ -39,12 +33,11 @@ object MergeStore {
             occurrenceEpochDay = safe.nextOccurrence().toEpochDay(),
             remindDaysBefore = safe.remindDaysBefore.distinct().sorted(),
             remindHour = safe.remindHour,
-            remindMinute = safe.remindMinute,
-            alarmMode = safe.isAlarmMode
+            remindMinute = safe.remindMinute
         )
     }
 
-    /** 一组日程当前是否仍能在相同时间、以相同模式提醒。 */
+    /** 一组日程当前是否仍能在相同时间提醒。 */
     internal fun areCompatible(events: List<Event>): Boolean {
         if (events.size < 2) return false
         val keys = events.map { keyOf(it) }
@@ -106,19 +99,16 @@ object MergeStore {
     /** 解散一个合并组。组 ID 已在读取时去重，所以只会影响目标组。 */
     fun unmerge(context: Context, groupId: Long) {
         save(context, load(context).filterNot { it.id == groupId })
-        clearFired(context, groupId)
     }
 
     /**
      * 清理并返回当前有效组。成员删除后可保留剩余成员；提醒签名不再一致则整组解散，
-     * 避免通知把不同日期或不同提醒模式的日程说成「同一天还有」。
+     * 避免通知把不同日期或不同提醒时刻的日程说成「同一天还有」。
      */
     fun prune(context: Context, events: List<Event>): List<MergeGroup> {
         val current = load(context)
         val valid = sanitizeGroups(current, events)
         if (valid != current) {
-            current.filter { old -> valid.none { it == old } }
-                .forEach { clearFired(context, it.id) }
             save(context, valid)
         }
         return valid
@@ -157,20 +147,7 @@ object MergeStore {
                 }.filter { it.eventIds.size >= 2 } + incoming
             }
         }
-        // 裸数组/旧备份没有统一通知元数据；合并导入时保留现有组，也保留其去重窗口。
-        // 覆盖导入或显式恢复组时才重置时间戳，避免备份里的旧组状态影响新提醒。
-        if (replace || incoming != null) clearAllFired(context)
         save(context, sanitizeGroups(combined, events))
-    }
-
-    /** 该组现在是否应该真正提醒（响铃 / 发通知）。 */
-    fun shouldAlert(context: Context, groupId: Long, now: Long = System.currentTimeMillis()): Boolean {
-        val sp = prefs(context)
-        val key = "$KEY_FIRED:$groupId"
-        val last = sp.getLong(key, 0L)
-        if (last in 1..now && now - last < ALERT_WINDOW_MS) return false
-        sp.edit().putLong(key, now).apply()
-        return true
     }
 
     /** 在已有 ID 集合上生成唯一 ID，批量建组也不会撞同一毫秒。 */
@@ -193,17 +170,6 @@ object MergeStore {
 
     private fun write(context: Context, groups: List<MergeGroup>) {
         prefs(context).edit().putString(KEY_GROUPS, gson.toJson(groups)).apply()
-    }
-
-    private fun clearFired(context: Context, groupId: Long) {
-        prefs(context).edit().remove("$KEY_FIRED:$groupId").apply()
-    }
-
-    private fun clearAllFired(context: Context) {
-        val sp = prefs(context)
-        val editor = sp.edit()
-        sp.all.keys.filter { it.startsWith("$KEY_FIRED:") }.forEach(editor::remove)
-        editor.apply()
     }
 
     private fun prefs(context: Context) =

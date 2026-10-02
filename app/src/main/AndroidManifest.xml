@@ -1,80 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- 通知 -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- WebDAV 备份：上传/下载备份文件 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 精确闹钟：保证提醒准时触发 -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <!-- Android 13+ 闹钟类应用可直接获得精确闹钟能力，无需用户手动到设置里授予 -->
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <!-- 电池优化白名单：防止国产 ROM 杀后台导致提醒失效 -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <!-- 开机自启：恢复提醒闹钟 -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- 闹钟式提醒：前台服务循环播放铃声，并在响铃期间持有唤醒锁 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- 全屏提醒：到点直接弹出应用内全屏页面（锁屏可见） -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <!-- WebDAV 备份：判断网络是否可用后再上传 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:name=".AwaitApp"
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Await">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTop">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- 全屏提醒页：由通知 fullScreenIntent 拉起，锁屏可见并点亮屏幕 -->
-        <activity
-            android:name=".ReminderActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:launchMode="singleTask"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:theme="@style/Theme.Await.Reminder" />
-
-        <!-- 闹钟响铃：前台服务，循环播放闹钟铃声 + 持续震动 -->
-        <service
-            android:name=".notify.AlarmRingService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
-
-        <receiver
-            android:name=".notify.AlarmReceiver"
-            android:exported="false" />
-
-        <!-- 定时 WebDAV 备份的闹钟入口 -->
-        <receiver
-            android:name=".backup.BackupAlarmReceiver"
-            android:exported="false" />
-
-        <receiver
-            android:name=".notify.BootReceiver"
-            android:exported="true">
+        <receiver android:name=".backup.BackupAlarmReceiver" android:exported="false" />
+        <receiver android:name=".notify.BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-                <!-- 应用升级后恢复闹钟与备份计划 -->
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>

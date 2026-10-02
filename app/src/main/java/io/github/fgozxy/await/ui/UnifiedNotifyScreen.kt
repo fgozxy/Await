@@ -131,11 +131,11 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
             ) {
                 SectionCard(
                     "合并同时触发的提醒",
-                    "日期、提前天数、提醒时刻和提醒模式一致时，合并后只提醒一次。"
+                    "日期、提前天数和推送时刻一致时，合并后只发送一条 Telegram 消息。"
                 ) {
                     Text(
                         "合并不改动日程本身，也不会让任何一条漏掉提醒——" +
-                            "去重只发生在提醒触发的那一刻，随时可以解散。",
+                            "服务端会在同一时刻合并推送，随时可以解散。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -198,7 +198,6 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                         val timing = key.remindDaysBefore.joinToString("、") {
                             if (it == 0) "当天" else "提前 ${it} 天"
                         }
-                        val mode = if (key.alarmMode) "闹钟式" else "普通通知"
                         val distance = when {
                             days == 0 -> "就是今天"
                             days > 0 -> "还有 $days 天"
@@ -206,7 +205,7 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                         }
                         SectionCard(
                             "%04d-%02d-%02d".format(date.year, date.monthValue, date.dayOfMonth),
-                            "$distance · $timing · %02d:%02d · $mode · ${dayEvents.size} 件".format(
+                            "$distance · $timing · %02d:%02d · Telegram · ${dayEvents.size} 件".format(
                                 key.remindHour,
                                 key.remindMinute
                             )
@@ -252,7 +251,6 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                                                         event.remindHour, event.remindMinute
                                                     )
                                                 )
-                                                if (event.isAlarmMode) append(" · 闹钟式")
                                                 if (event.id in mergedIds) append(" · 已在合并组")
                                             },
                                             style = MaterialTheme.typography.bodySmall,

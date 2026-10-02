@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import io.github.fgozxy.await.notify.NotificationHelper
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -99,8 +98,7 @@ class BackupAlarmReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
-                val result = BackupService.backupNow(app, manual = false)
-                result.onFailure { NotificationHelper.showBackupFailed(app, it.message ?: "未知原因") }
+                BackupService.backupNow(app, manual = false)
             } finally {
                 // 失败也照常排下一次，但不走「补做」分支，避免短周期重试
                 BackupScheduler.reschedule(app, allowCatchUp = false)

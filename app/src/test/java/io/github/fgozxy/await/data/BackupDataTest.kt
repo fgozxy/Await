@@ -61,7 +61,7 @@ class BackupDataTest {
     }
 
     @Test
-    fun incompatibleMergeGroupFromBackupIsDiscarded() {
+    fun legacyAlarmModeIsIgnoredWhenRestoringTelegramMergeGroup() {
         val bundle = BackupData.parseBundle(
             """{
               "events":[
@@ -72,7 +72,7 @@ class BackupDataTest {
             }""".trimIndent()
         ).getOrThrow()
 
-        assertTrue(bundle.mergeGroups.orEmpty().isEmpty())
+        assertEquals(listOf(MergeGroup(10, listOf(1, 2))), bundle.mergeGroups)
     }
 
     @Test

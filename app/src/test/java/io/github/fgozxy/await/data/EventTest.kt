@@ -1,6 +1,6 @@
 package io.github.fgozxy.await.data
 
-import io.github.fgozxy.await.notify.AlarmScheduler
+import io.github.fgozxy.await.notify.ReminderTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -34,7 +34,7 @@ class EventTest {
 
         assertEquals(
             LocalDateTime.of(2028, 2, 29, 9, 0),
-            AlarmScheduler.nextTrigger(event, LocalDateTime.of(2027, 3, 1, 0, 0))
+            ReminderTime.nextTrigger(event, LocalDateTime.of(2027, 3, 1, 0, 0))
         )
     }
 
@@ -48,7 +48,7 @@ class EventTest {
         )
         val from = LocalDateTime.of(2026, 8, 26, 1, 0)
 
-        assertEquals(LocalDateTime.of(2026, 8, 26, 9, 0), AlarmScheduler.nextTrigger(event, from))
+        assertEquals(LocalDateTime.of(2026, 8, 26, 9, 0), ReminderTime.nextTrigger(event, from))
     }
 
     @Test
@@ -62,11 +62,11 @@ class EventTest {
 
         assertEquals(
             LocalDateTime.of(2026, 9, 3, 9, 0),
-            AlarmScheduler.nextTrigger(event, LocalDateTime.of(2026, 9, 2, 10, 0))
+            ReminderTime.nextTrigger(event, LocalDateTime.of(2026, 9, 2, 10, 0))
         )
         assertEquals(
             LocalDateTime.of(2026, 9, 9, 9, 0),
-            AlarmScheduler.nextTrigger(event, LocalDateTime.of(2026, 9, 3, 10, 0))
+            ReminderTime.nextTrigger(event, LocalDateTime.of(2026, 9, 3, 10, 0))
         )
     }
 
@@ -78,6 +78,6 @@ class EventTest {
             remindDaysBefore = listOf(0)
         )
 
-        assertNull(AlarmScheduler.nextTrigger(event, LocalDateTime.of(2026, 1, 1, 0, 0)))
+        assertNull(ReminderTime.nextTrigger(event, LocalDateTime.of(2026, 1, 1, 0, 0)))
     }
 }
