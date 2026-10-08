@@ -2,8 +2,6 @@ package io.github.fgozxy.await.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -32,14 +30,17 @@ import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -66,7 +67,6 @@ fun HomeScreen(
     var searching by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Event?>(null) }
     var creating by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf<Event?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -249,7 +249,6 @@ fun HomeScreen(
                 }
                 EventList(groups, viewModel,
                     onClick = { editing = it },
-                    onLongClick = { deleting = it },
                     onSwipeDelete = { deleteWithUndo(it) })
             }
         }
@@ -269,20 +268,6 @@ fun HomeScreen(
                 }
             )
         }
-    }
-
-    deleting?.let { target ->
-        AlertDialog(
-            onDismissRequest = { deleting = null },
-            title = { Text("删除「${target.title}」？") },
-            text = { Text("删除后其提醒也会一并取消，且无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = { viewModel.delete(target.id); deleting = null }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton({ deleting = null }) { Text("取消") } }
-        )
     }
 
     // ── 管理分组对话框（多选 + 全选）──
@@ -747,26 +732,31 @@ private fun groupEvents(events: List<Event>): Groups {
 /**
  * 左滑删除的包装：滑到底即触发 [onDelete]，滑出过程中露出红色底衬。
  *
- * 只允许从右往左滑——从左往右留给系统的返回手势，两者抢同一片区域会互相打架。
+ * 始终从右往左滑，方向不随系统的文字布局方向改变。
  */
 @Composable
 private fun SwipeToDeleteBox(
     onDelete: () -> Unit,
     content: @Composable () -> Unit
 ) {
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val deleteDirection = if (isRtl) SwipeToDismissBoxValue.StartToEnd else SwipeToDismissBoxValue.EndToStart
+    val currentDeleteDirection by rememberUpdatedState(deleteDirection)
+    val currentOnDelete by rememberUpdatedState(onDelete)
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
+            if (value == currentDeleteDirection) {
+                currentOnDelete()
                 true
-            } else false
+            } else value == SwipeToDismissBoxValue.Settled
         },
         // 要滑过卡片宽度的一半才算数，避免列表滚动时蹭一下就误删
         positionalThreshold = { it * 0.5f }
     )
     SwipeToDismissBox(
         state = state,
-        enableDismissFromStartToEnd = false,
+        enableDismissFromStartToEnd = isRtl,
+        enableDismissFromEndToStart = !isRtl,
         backgroundContent = {
             Box(
                 Modifier
@@ -774,7 +764,7 @@ private fun SwipeToDeleteBox(
                     .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.errorContainer)
                     .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd
+                contentAlignment = AbsoluteAlignment.CenterRight
             ) {
                 Icon(
                     Icons.Default.Delete,
@@ -787,13 +777,11 @@ private fun SwipeToDeleteBox(
 }
 
 /** 列表按分组渲染 */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EventList(
     groups: Groups,
     viewModel: EventViewModel,
     onClick: (Event) -> Unit,
-    onLongClick: (Event) -> Unit,
     onSwipeDelete: (Event) -> Unit
 ) {
     LazyColumn(
@@ -815,7 +803,6 @@ private fun EventList(
                     EventCard(
                         event = event,
                         onClick = { onClick(event) },
-                        onLongClick = { onLongClick(event) },
                         onTogglePin = { viewModel.togglePin(event.id) }
                     )
                 }
@@ -836,12 +823,10 @@ private fun SectionHeader(text: String) {
 }
 
 /** 单条日程卡片：左侧色条 + 标题日期 + 右侧大字倒计时 */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EventCard(
     event: Event,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
     onTogglePin: () -> Unit
 ) {
     val accent = EventColors[Math.floorMod(event.colorIndex, EventColors.size)]
@@ -849,10 +834,7 @@ private fun EventCard(
 
     ElevatedCard(
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().combinedClickable(
-            onClick = onClick,
-            onLongClick = onLongClick
-        )
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
     ) {
         Row(Modifier.height(IntrinsicSize.Min)) {
             Box(
