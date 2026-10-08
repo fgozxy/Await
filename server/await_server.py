@@ -1,4 +1,4 @@
-"""Single-writer Await schedule API and durable Telegram delivery queue."""
+"""Single-writer Await schedule API and durable per-channel delivery queues."""
 import calendar
 import hashlib
 import hmac
@@ -10,11 +10,18 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib import error, request
+from urllib import error, request, parse
 from zoneinfo import ZoneInfo
 
 UTC = timezone.utc
 MAX_BODY = 4 * 1024 * 1024
+REMOTE_CHANNELS = {"telegram", "ntfy"}
+
+
+def validate_channels(value):
+    if not isinstance(value, list) or any(not isinstance(c, str) or c not in REMOTE_CHANNELS for c in value):
+        raise ValueError("Invalid notification channels")
+    return sorted(set(value))
 
 
 def canonical(value):
@@ -104,7 +111,8 @@ def validate_snapshot(raw):
             raise ValueError("Invalid merge membership")
         claimed.update(members)
         groups.append(members)
-    return dict(clientId=client, revision=revision, timezone=zone,
+    channels = validate_channels(raw.get("notificationChannels", ["telegram"]))
+    return dict(clientId=client, revision=revision, timezone=zone, notificationChannels=channels,
                 events=sorted(normalized, key=lambda e: e["id"]), mergeGroups=sorted(groups))
 
 
@@ -171,6 +179,11 @@ def clip_message(text):
     return encoded[:4095 * 2].decode("utf-16-le", errors="ignore") + "…"
 
 
+def clip_ntfy_message(text):
+    encoded = text.encode("utf-8")
+    return text if len(encoded) <= 4096 else encoded[:4093].decode("utf-8", errors="ignore") + "…"
+
+
 class DeliveryError(Exception):
     def __init__(self, message, retryable=True, retry_after=0):
         super().__init__(message)
@@ -218,6 +231,55 @@ class Telegram:
             raise DeliveryError("无法连接 Telegram，请检查服务器网络") from None
 
 
+class NoRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class Ntfy:
+    def __init__(self, url, topic, token="", opener=None):
+        uri = parse.urlsplit(url)
+        if (any(ord(c) <= 32 for c in url) or uri.scheme != "https" or not uri.hostname or uri.username or uri.password or
+                uri.query or uri.fragment or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", topic)):
+            raise ValueError("Invalid NTFY_URL or NTFY_TOPIC")
+        if token and (not token.isascii() or any(ord(c) < 33 or ord(c) > 126 for c in token)):
+            raise ValueError("Invalid NTFY_TOKEN")
+        self._url, self._topic, self._token = url.rstrip('/'), topic, token
+        self._opener = opener or request.build_opener(NoRedirect()).open
+
+    def send(self, text):
+        # JSON publishing preserves Unicode titles and avoids header encoding issues.
+        payload = json.dumps(dict(topic=self._topic, title="Await 日程提醒", message=clip_ntfy_message(text)),
+                             ensure_ascii=False).encode()
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        if self._token:
+            headers["Authorization"] = "Bearer " + self._token
+        req = request.Request(self._url, data=payload, headers=headers)
+        try:
+            try:
+                response = self._opener(req, timeout=15)
+            except error.HTTPError as exc:
+                response = exc
+            with response:
+                code = response.code
+                raw = response.read(65536)
+                retry_after = response.headers.get("Retry-After", "0") if hasattr(response, "headers") else "0"
+            if 200 <= code < 300:
+                try:
+                    body = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    raise DeliveryError("ntfy 返回无效响应") from None
+                if isinstance(body, dict) and body.get("id") and body.get("event") == "message":
+                    return
+                raise DeliveryError("ntfy 返回无效响应")
+            after = min(int(retry_after), 86400) if retry_after.isdigit() else 0
+            raise DeliveryError(f"ntfy 推送失败（HTTP {code}）", code == 429 or code >= 500, after)
+        except DeliveryError:
+            raise
+        except Exception:
+            raise DeliveryError("无法连接 ntfy，请检查服务器网络") from None
+
+
 class ScheduleStore:
     def __init__(self, path, sender, clock=time.time):
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -231,15 +293,26 @@ class ScheduleStore:
                 attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '', sent_at INTEGER NOT NULL DEFAULT 0);
         """)
-        self.lock, self.sender, self.clock = threading.RLock(), sender, clock
+        # Migrate existing queues without changing Telegram job IDs or sent history.
+        if "channel" not in {row[1] for row in self.db.execute("PRAGMA table_info(jobs)")}:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'")
+            self.db.commit()
+        self.lock, self.clock = threading.RLock(), clock
+        self.senders = sender if isinstance(sender, dict) else {"telegram": sender}
         self._last_generated = None
 
     def snapshot(self):
         row = self.db.execute("SELECT body FROM snapshot WHERE id=1").fetchone()
-        return json.loads(row["body"]) if row else None
+        if not row:
+            return None
+        body = json.loads(row["body"])
+        body.setdefault("notificationChannels", ["telegram"])
+        return body
 
     def update(self, raw):
         body = validate_snapshot(raw)
+        if not set(body["notificationChannels"]) <= self.senders.keys():
+            raise ValueError("Selected channel is not configured on server")
         with self.lock, self.db:
             old = self.snapshot()
             if old and body["clientId"] != old["clientId"]:
@@ -277,17 +350,17 @@ class ScheduleStore:
         valid_ids = set()
         for (due, _, _), events in buckets.items():
             members = sorted(digest([event, snapshot["timezone"]]) for event, _ in events)
-            job_id = digest([due, members])
-            valid_ids.add(job_id)
-            if not insert:
-                continue
             text = "⏳ Await 日程提醒\n\n" + "\n\n".join(
                 event["title"] + "\n" + target.isoformat() + " · " +
                 ("就是今天！" if (target - datetime.fromtimestamp(due, zone).date()).days == 0
                  else f"还有 {(target - datetime.fromtimestamp(due, zone).date()).days} 天") +
                 ("\n" + event["note"] if event["note"] else "") for event, target in events)
-            self.db.execute("INSERT OR IGNORE INTO jobs (id,due,members,body) VALUES (?,?,?,?)",
-                            (job_id, due, canonical(members), clip_message(text)))
+            for channel in snapshot.get("notificationChannels", ["telegram"]):
+                job_id = digest([due, members]) if channel == "telegram" else digest([due, members, channel])
+                valid_ids.add(job_id)
+                if insert:
+                    self.db.execute("INSERT OR IGNORE INTO jobs (id,due,members,body,channel) VALUES (?,?,?,?,?)",
+                                    (job_id, due, canonical(members), clip_message(text), channel))
         return valid_ids
 
     def tick(self):
@@ -306,7 +379,10 @@ class ScheduleStore:
                                    "AND retry_at<=? ORDER BY due LIMIT 20", (now, now)).fetchall()
             for job in jobs:
                 try:
-                    self.sender.send(job["body"])
+                    sender = self.senders.get(job["channel"])
+                    if sender is None:
+                        raise DeliveryError("通知渠道未配置", retryable=False)
+                    sender.send(job["body"])
                 except DeliveryError as exc:
                     attempts = job["attempts"] + 1
                     delay = max(exc.retry_after, min(3600, 30 * 2 ** min(attempts - 1, 7)))
@@ -325,6 +401,8 @@ class ScheduleStore:
                 "SELECT state,count(*) AS n FROM jobs GROUP BY state")}
             last = self.db.execute("SELECT error FROM jobs WHERE error!='' ORDER BY due DESC LIMIT 1").fetchone()
             return dict(revision=snapshot["revision"] if snapshot else 0,
+                        notificationProtocol=1, availableChannels=sorted(self.senders),
+                        notificationChannels=snapshot["notificationChannels"] if snapshot else [],
                         clientId=snapshot["clientId"] if snapshot else "",
                         eventCount=len(snapshot["events"]) if snapshot else 0,
                         pending=counts.get("pending", 0), failed=counts.get("failed", 0),
@@ -391,26 +469,45 @@ def make_handler(store, api_key):
                 self.reply(404, dict(error="Not found"))
                 return
             try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_BODY:
+                    self.reply(413, dict(error="Invalid body size"))
+                    return
+                body = json.loads(self.rfile.read(length))
+                channels = validate_channels(body.get("notificationChannels", ["telegram"]))
+                if not channels or not set(channels) <= store.senders.keys():
+                    raise ValueError("Unavailable channel")
+                results = {}
                 with store.lock:
-                    store.sender.send("✅ Await Telegram 测试推送\n服务器通知链路正常。")
-                self.reply(200, dict(ok=True))
-            except DeliveryError as exc:
-                self.reply(502, dict(error=str(exc)))
+                    for channel in channels:
+                        try:
+                            store.senders[channel].send("✅ Await 测试推送\n服务器通知链路正常。")
+                            results[channel] = "已发送"
+                        except DeliveryError as exc:
+                            results[channel] = str(exc)
+                self.reply(200, dict(ok=all(v == "已发送" for v in results.values()), results=results))
+            except (ValueError, TypeError, AttributeError):
+                self.reply(400, dict(error="Invalid or unavailable notification channels"))
     return Handler
 
 
 def main():
     os.umask(0o077)
-    required = ("AWAIT_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+    required = ("AWAIT_API_KEY",)
     if any(not os.environ.get(name) for name in required):
         raise SystemExit("Required environment variables: " + ", ".join(required))
     key = os.environ["AWAIT_API_KEY"]
     if len(key) < 32 or not key.isascii() or any(c.isspace() for c in key):
         raise SystemExit("AWAIT_API_KEY must contain at least 32 non-whitespace ASCII characters")
-    sender = Telegram(os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_ID"])
+    senders = {}
+    if os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_CHAT_ID"):
+        senders["telegram"] = Telegram(os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", ""))
+    if os.environ.get("NTFY_URL") or os.environ.get("NTFY_TOPIC"):
+        senders["ntfy"] = Ntfy(os.environ.get("NTFY_URL", ""), os.environ.get("NTFY_TOPIC", ""),
+                               os.environ.get("NTFY_TOKEN", ""))
     path = os.environ.get("AWAIT_DB", "/data/await.sqlite3")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    store = ScheduleStore(path, sender)
+    store = ScheduleStore(path, senders)
     stop = threading.Event()
 
     def scheduler():

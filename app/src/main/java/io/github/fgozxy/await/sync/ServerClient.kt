@@ -8,6 +8,18 @@ import java.net.URL
 class ServerException(val retryable: Boolean, message: String) : Exception(message)
 
 object ServerClient {
+    fun checkChannels(config: SyncSettings.Config, channels: List<String>): JsonObject {
+        val status = request(config, "GET", "/v1/status")
+        if (status["notificationProtocol"]?.asInt != 1) {
+            throw ServerException(false, "请先升级通知服务器，再同步渠道设置")
+        }
+        val available = status["availableChannels"]?.asJsonArray?.map { it.asString }.orEmpty()
+        if (!available.containsAll(channels)) {
+            throw ServerException(false, "服务器尚未配置所选通知渠道，请先配置 Telegram 或 ntfy")
+        }
+        return status
+    }
+
     fun request(config: SyncSettings.Config, method: String, path: String, body: String? = null): JsonObject {
         require(config.isValid)
         var connection: HttpURLConnection? = null
@@ -31,8 +43,8 @@ object ServerClient {
                 val message = when (code) {
                     401, 403 -> "服务器访问密钥不正确"
                     409 -> "服务器已绑定另一台手机，需先迁移服务端数据"
-                    400 -> "日程数据或同步版本被服务器拒绝"
-                    502 -> "服务器无法推送 Telegram，请检查 Bot 配置和服务器网络"
+                    400 -> "服务器拒绝日程、渠道设置或同步版本，请检查服务端配置"
+                    502 -> "服务器无法推送，请检查通知渠道配置和服务器网络"
                     else -> "服务器请求失败（HTTP $code）"
                 }
                 throw ServerException(code == 429 || code >= 500, message)

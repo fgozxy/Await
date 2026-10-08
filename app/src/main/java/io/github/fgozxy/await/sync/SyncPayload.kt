@@ -6,9 +6,11 @@ import io.github.fgozxy.await.data.MergeGroup
 
 /** Explicit wire fields keep old Android alarm fields and secrets out of uploads. */
 object SyncPayload {
-    fun json(clientId: String, revision: Long, timezone: String, events: List<Event>, groups: List<MergeGroup>): String =
+    fun json(clientId: String, revision: Long, timezone: String, events: List<Event>, groups: List<MergeGroup>,
+             notificationChannels: List<String> = listOf("telegram")): String =
         Gson().toJson(mapOf(
             "clientId" to clientId, "revision" to revision, "timezone" to timezone,
+            "notificationChannels" to notificationChannels.distinct().sorted(),
             "events" to events.map { raw ->
                 val event = raw.sanitized()
                 mapOf("id" to event.id, "title" to event.title, "note" to event.note,

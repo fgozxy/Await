@@ -227,7 +227,7 @@ fun EditEventSheet(
 
             // 提醒设置
             Column {
-                Text("Telegram 推送时机（可多选，全部取消则不提醒）", style = MaterialTheme.typography.labelMedium)
+                Text("提醒时机（可多选，全部取消则不提醒）", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     REMIND_OPTIONS.forEach { (days, label) ->
@@ -258,7 +258,7 @@ fun EditEventSheet(
                         Text("点击选择", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                Text("提醒将由服务器推送到 Telegram", style = MaterialTheme.typography.bodySmall)
+                Text("通知渠道在「通知设置」中选择，可同时开启软件、Telegram 和 ntfy 通知", style = MaterialTheme.typography.bodySmall)
             }
 
             // 操作按钮

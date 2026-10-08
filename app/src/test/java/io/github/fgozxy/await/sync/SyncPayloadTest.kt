@@ -35,6 +35,16 @@ class SyncPayloadTest {
     }
 
     @Test
+    fun localOnlyDisablesServerChannelsAndMultipleChannelsAreExplicit() {
+        val local = JsonParser.parseString(SyncPayload.json("test-phone", 1, "UTC",
+            emptyList(), emptyList(), emptyList())).asJsonObject
+        assertEquals(0, local["notificationChannels"].asJsonArray.size())
+        val both = JsonParser.parseString(SyncPayload.json("test-phone", 2, "UTC",
+            emptyList(), emptyList(), listOf("telegram", "ntfy"))).asJsonObject
+        assertEquals(listOf("ntfy", "telegram"), both["notificationChannels"].asJsonArray.map { it.asString })
+    }
+
+    @Test
     fun serverUrlRequiresHttpsAndCannotCarryCredentialsOrQuery() {
         assertTrue(SyncSettings.validUrl("https://await.example.com"))
         assertTrue(SyncSettings.validUrl("https://example.com/await"))

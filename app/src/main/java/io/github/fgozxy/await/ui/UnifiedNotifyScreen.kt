@@ -32,9 +32,8 @@ import java.time.LocalDate
  * 自动把日程按「下一次发生日期 + 提醒设置」归拢，只有实际会同时触发且提醒模式一致的
  * 日程才允许合并。勾选后建成合并组：到点只提醒一次，通知正文里带上其他成员。
  *
- * 合并只影响提醒的发出方式，不动日程本身，也不动闹钟调度：每个成员的闹钟照旧存在，
- * 去重发生在触发那一刻（见 MergeStore.shouldAlert）。所以解散合并组是完全无损的，
- * 某个成员被删掉也不会连累同组其他日程漏提醒。
+ * 合并只改变各渠道中同一时刻的消息分组，不修改日程和提醒规则。
+ * 软件通知在本机触发时分组，云端通知在生成队列时分组；成员删除后保留剩余日程。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,11 +130,11 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
             ) {
                 SectionCard(
                     "合并同时触发的提醒",
-                    "日期、提前天数和推送时刻一致时，合并后只发送一条 Telegram 消息。"
+                    "日期、提前天数和推送时刻一致时，每个已开启的渠道各发送一条通知。"
                 ) {
                     Text(
                         "合并不改动日程本身，也不会让任何一条漏掉提醒——" +
-                            "服务端会在同一时刻合并推送，随时可以解散。",
+                            "各通知渠道会在同一时刻合并提醒，随时可以解散。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -205,7 +204,7 @@ fun UnifiedNotifyScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                         }
                         SectionCard(
                             "%04d-%02d-%02d".format(date.year, date.monthValue, date.dayOfMonth),
-                            "$distance · $timing · %02d:%02d · Telegram · ${dayEvents.size} 件".format(
+                            "$distance · $timing · %02d:%02d · ${dayEvents.size} 件".format(
                                 key.remindHour,
                                 key.remindMinute
                             )

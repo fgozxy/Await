@@ -3,7 +3,7 @@ package io.github.fgozxy.await.notify
 import io.github.fgozxy.await.data.Event
 import java.time.LocalDateTime
 
-/** 提醒时间计算，仅用于日期验证；Android 不再调度日程提醒。 */
+/** 提醒时间计算，供软件通知调度和日期验证共用。 */
 object ReminderTime {
     /** 计算某日程下一次提醒的触发时间；没有未来提醒时返回 null */
     fun nextTrigger(event: Event, from: LocalDateTime = LocalDateTime.now()): LocalDateTime? {

@@ -1,0 +1,230 @@
+package io.github.fgozxy.await.ui
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.google.gson.Gson
+import io.github.fgozxy.await.notify.LocalNotifications
+import io.github.fgozxy.await.notify.NotificationChannel
+import io.github.fgozxy.await.notify.NotificationChannels
+import io.github.fgozxy.await.sync.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Composable
+fun rememberSyncStatus(): String {
+    val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
+    val sp = remember { SyncSettings.prefs(context) }
+    var revision by remember { mutableIntStateOf(0) }
+    DisposableEffect(sp, owner) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> revision++ }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
+        sp.registerOnSharedPreferenceChangeListener(listener)
+        owner.lifecycle.addObserver(observer)
+        onDispose { sp.unregisterOnSharedPreferenceChangeListener(listener); owner.lifecycle.removeObserver(observer) }
+    }
+    return remember(revision) {
+        val channels = NotificationChannels.load(context)
+        val messages = mutableListOf<String>()
+        if (NotificationChannel.LOCAL in channels) {
+            messages += when {
+                !LocalNotifications.allowed(context) -> "软件通知已选择，请允许系统通知权限"
+                !LocalNotifications.exactAllowed(context) -> "软件通知已开启；未允许精确提醒，通知可能延迟"
+                else -> "软件通知已开启"
+            }
+        }
+        if (NotificationChannels.remote(channels).isNotEmpty() || SyncSettings.load(context).isValid) {
+            messages += when {
+                !SyncSettings.load(context).isValid -> "请配置通知服务器"
+                !sp.getString("last_error", "").isNullOrEmpty() -> sp.getString("last_error", "").orEmpty()
+                sp.getLong("revision", 0) > sp.getLong("synced_revision", 0) -> "云端设置等待同步；服务器仍按上次设置提醒"
+                NotificationChannels.remote(channels).isEmpty() -> "云端通知已关闭"
+                else -> "云端通知已同步，手机关机后服务器仍会推送"
+            }
+        }
+        messages.joinToString("\n")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NotificationScreen(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val saved = remember { SyncSettings.load(context) }
+    var channels by remember { mutableStateOf(NotificationChannels.load(context)) }
+    var url by remember { mutableStateOf(saved.url) }
+    var apiKey by remember { mutableStateOf(saved.apiKey) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    val syncStatus = rememberSyncStatus()
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        LocalNotifications.reschedule(context)
+        result = if (it) "软件通知权限已开启" else "软件通知权限未开启，可在系统设置中允许"
+    }
+
+    fun config() = SyncSettings.Config(url.trim().trimEnd('/'), apiKey.trim())
+
+    fun requestLocalPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context,
+                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            runCatching { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
+                .onFailure { result = "无法打开系统设置，请手动允许 Await 通知" }
+        }
+    }
+
+    fun save() {
+        if (channels.isEmpty()) { result = "请至少选择一种通知渠道"; return }
+        val remote = NotificationChannels.remote(channels)
+        val draft = config()
+        if (remote.isNotEmpty() && !draft.isValid) {
+            result = "Telegram 和 ntfy 需要 HTTPS 服务器地址及至少 32 位的访问密钥"
+            return
+        }
+        if ((url.isNotBlank() || apiKey.isNotBlank()) && !draft.isValid) {
+            result = "服务器配置不完整；请填写有效地址与密钥，或仅使用软件通知"
+            return
+        }
+        busy = true
+        scope.launch {
+            val successful = withContext(Dispatchers.IO) {
+                try {
+                    synchronized(SyncCoordinator.lock) {
+                        // Retain an existing server so disabling remote channels also cancels its queue.
+                        if (draft.isValid) SyncSettings.save(context, draft)
+                        NotificationChannels.save(context, channels)
+                        SyncSettings.prefs(context).edit().putString("last_error", "").apply()
+                        SyncCoordinator.changed(context)
+                    }
+                    true
+                } catch (_: Exception) { false }
+            }
+            result = if (successful) "通知渠道已保存" +
+                (if (SyncSettings.load(context).isValid) "；云端设置联网后自动同步" else "")
+                else "保存失败，请稍后重试"
+            busy = false
+            if (successful && NotificationChannel.LOCAL in channels && !LocalNotifications.allowed(context)) {
+                requestLocalPermission()
+            }
+        }
+    }
+
+    fun remoteTask(test: Boolean) {
+        val draft = config()
+        if (!draft.isValid) { result = "请填写有效的 HTTPS 服务器地址和访问密钥"; return }
+        val remote = NotificationChannels.remote(channels)
+        if (test && remote.isEmpty()) { result = "请先选择 Telegram 或 ntfy"; return }
+        busy = true
+        scope.launch {
+            try {
+                val taskResult = withContext(Dispatchers.IO) {
+                    val status = ServerClient.checkChannels(draft, remote)
+                    if (test) {
+                        val response = ServerClient.request(draft, "POST", "/v1/test",
+                            Gson().toJson(mapOf("notificationChannels" to remote)))
+                        response["results"].asJsonObject.entrySet().joinToString("\n") { (name, value) ->
+                            "$name：${value.asString}"
+                        }
+                    } else {
+                        "已配置渠道：${status["availableChannels"].asJsonArray.joinToString { it.asString }}\n" +
+                            "服务器日程：${status["eventCount"].asInt} 条\n" +
+                            "待发送：${status["pending"].asInt} 条，失败：${status["failed"].asInt} 条" +
+                            status["lastError"].asString.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
+                    }
+                }
+                result = taskResult
+            } catch (e: ServerException) {
+                result = e.message.orEmpty()
+            } catch (_: Exception) {
+                result = "服务器返回的状态格式不正确"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Scaffold(topBar = {
+            TopAppBar(title = { Text("通知设置") }, navigationIcon = {
+                IconButton(onClick = onDismiss, enabled = !busy) { Icon(Icons.Default.Close, "关闭") }
+            })
+        }) { padding ->
+            Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("可选择一个或多个通知渠道，所有日程使用这里的设置。提醒日期和时刻仍可在各日程中单独设置。")
+                NotificationChannel.entries.forEach { channel ->
+                    Row(Modifier.fillMaxWidth().toggleable(value = channel in channels, enabled = !busy,
+                        role = Role.Checkbox, onValueChange = { enabled ->
+                            channels = if (enabled) channels + channel else channels - channel
+                        }), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = channel in channels, onCheckedChange = null, enabled = !busy)
+                        Text(channel.label)
+                    }
+                }
+                if (NotificationChannel.LOCAL in channels) {
+                    Text("软件通知在本机发送，无需服务器或网络。手机关机时无法通知，重新开机后补发最近 24 小时内已安排的提醒。")
+                    OutlinedButton(onClick = ::requestLocalPermission, enabled = !busy) { Text("允许软件通知") }
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        OutlinedButton(onClick = {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:${context.packageName}"))) }
+                                .onFailure { result = "无法打开系统设置，请手动允许 Await 闹钟和提醒" }
+                        }, enabled = !busy) { Text("允许精确提醒") }
+                    }
+                    OutlinedButton(onClick = {
+                        result = if (LocalNotifications.show(context, "✅ Await 软件通知测试", "test"))
+                            "软件测试通知已发送" else "请先允许软件通知权限"
+                    }, enabled = !busy) { Text("测试软件通知") }
+                }
+                HorizontalDivider()
+                Text("云端通知服务器", style = MaterialTheme.typography.titleMedium)
+                Text("Telegram 和 ntfy 由服务器定时发送，手机关机后也能推送。离线修改需同步成功后才会在云端生效。")
+                OutlinedTextField(url, { url = it }, label = { Text("服务器地址（HTTPS）") },
+                    singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(apiKey, { apiKey = it }, label = { Text("服务器访问密钥") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(), enabled = !busy, modifier = Modifier.fillMaxWidth())
+                Text("Telegram Bot Token / Chat ID、ntfy 地址 / Topic / Token 在服务器配置；手机访问密钥加密保存。")
+                Button(onClick = ::save, enabled = !busy) { Text("保存通知设置") }
+                OutlinedButton(onClick = { remoteTask(true) }, enabled = !busy) { Text("测试所选云端渠道") }
+                OutlinedButton(onClick = { remoteTask(false) }, enabled = !busy) { Text("查看服务器状态") }
+                Text(syncStatus, color = MaterialTheme.colorScheme.primary)
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (result.isNotBlank()) Text(result)
+                Text("关闭云端渠道后需完成一次同步，服务器才会取消待发提醒。同一服务器绑定一台手机；更换服务器后需停用旧服务器。",
+                    style = MaterialTheme.typography.bodySmall)
+                SelectionContainer { Text("本机安装 ID：${SyncSettings.clientId(context)}", style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
+}

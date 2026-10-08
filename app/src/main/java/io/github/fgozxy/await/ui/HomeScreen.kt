@@ -66,7 +66,7 @@ fun HomeScreen(
     // 备份与恢复 / 导入日程
     var showBackup by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
-    var showTelegram by remember { mutableStateOf(false) }
+    var showNotifications by remember { mutableStateOf(false) }
     val syncStatus = rememberSyncStatus()
     var showUnifiedNotify by remember { mutableStateOf(false) }
 
@@ -147,8 +147,8 @@ fun HomeScreen(
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text("Telegram 服务器") },
-                            onClick = { menuOpen = false; showTelegram = true },
+                            text = { Text("通知设置") },
+                            onClick = { menuOpen = false; showNotifications = true },
                             leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
                         )
                         DropdownMenuItem(
@@ -167,7 +167,7 @@ fun HomeScreen(
                             leadingIcon = { Icon(Icons.Default.Label, null) }
                         )
                         DropdownMenuItem(
-                            text = { Text("合并 Telegram 推送") },
+                            text = { Text("合并通知") },
                             onClick = { menuOpen = false; showUnifiedNotify = true },
                             leadingIcon = { Icon(Icons.Default.NotificationsPaused, null) }
                         )
@@ -194,7 +194,7 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            HealthBanner(syncStatus, "设置", { showTelegram = true })
+            HealthBanner(syncStatus, "设置", { showNotifications = true })
             if (filtered.isEmpty() && (query.isNotBlank() || selectedGroup != null)) {
                 // 搜索/筛选无结果
                 Column(
@@ -621,7 +621,7 @@ fun HomeScreen(
         ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
     }
 
-    if (showTelegram) TelegramScreen(onDismiss = { showTelegram = false })
+    if (showNotifications) NotificationScreen(onDismiss = { showNotifications = false })
 
     // ── 统一通知 ──
     if (showUnifiedNotify) {

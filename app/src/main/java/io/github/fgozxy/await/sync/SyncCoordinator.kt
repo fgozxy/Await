@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.work.*
 import io.github.fgozxy.await.data.EventStore
 import io.github.fgozxy.await.data.MergeStore
+import io.github.fgozxy.await.notify.LocalNotifications
+import io.github.fgozxy.await.notify.NotificationChannels
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
@@ -14,6 +16,7 @@ object SyncCoordinator {
         val sp = SyncSettings.prefs(context)
         val revision = sp.getLong("revision", 0) + 1
         check(sp.edit().putLong("revision", revision).commit())
+        LocalNotifications.reschedule(context)
         enqueue(context)
     }
 
@@ -31,7 +34,8 @@ object SyncCoordinator {
         val revision = SyncSettings.prefs(context).getLong("revision", 1).coerceAtLeast(1)
         val events = EventStore.load(context, failOnUnreadable = true)
         revision to SyncPayload.json(SyncSettings.clientId(context), revision,
-            ZoneId.systemDefault().id, events, MergeStore.prune(context, events))
+            ZoneId.systemDefault().id, events, MergeStore.prune(context, events),
+            NotificationChannels.remote(NotificationChannels.load(context)))
     }
 }
 
@@ -42,6 +46,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : Worker(contex
         val sp = SyncSettings.prefs(applicationContext)
         return try {
             val (revision, payload) = SyncCoordinator.snapshot(applicationContext)
+            ServerClient.checkChannels(config, NotificationChannels.remote(NotificationChannels.load(applicationContext)))
             ServerClient.request(config, "PUT", "/v1/schedule", payload)
             synchronized(SyncCoordinator.lock) {
                 if (SyncSettings.load(applicationContext) == config) {
