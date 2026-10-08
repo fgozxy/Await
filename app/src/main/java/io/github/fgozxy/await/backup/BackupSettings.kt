@@ -6,10 +6,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/**
- * 备份相关配置，存在应用私有的 SharedPreferences 中（其他应用读不到，
- * 但 root 或备份提取仍可读，属于「网盘应用密码」的常规安全级别）。
- */
+/** 云端备份偏好，不保存连接凭据；连接复用 SyncSettings。 */
 object BackupSettings {
 
     private const val PREFS = "await_backup"
@@ -36,7 +33,6 @@ object BackupSettings {
     val KEEP_OPTIONS = listOf(5, 10, 20, 50)
 
     data class Prefs(
-        val webdav: WebDavConfig = WebDavConfig(),
         val autoEnabled: Boolean = false,
         val intervalDays: Int = 1,
         val hour: Int = 22,
@@ -59,13 +55,14 @@ object BackupSettings {
 
     fun load(context: Context): Prefs {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (sp.getString("provider", "") != "await-cloud") {
+            // 不把旧 WebDAV 的自动任务转向新服务，也不保留旧明文密码。
+            check(sp.edit().putString("provider", "await-cloud")
+                .remove(K_URL).remove(K_USER).remove(K_PWD).remove(K_DIR)
+                .putBoolean(K_AUTO, false).remove(K_LAST_AT).remove(K_LAST_TRY)
+                .remove(K_LAST_MSG).remove(K_LAST_OK).commit())
+        }
         return Prefs(
-            webdav = WebDavConfig(
-                url = sp.getString(K_URL, "").orEmpty(),
-                user = sp.getString(K_USER, "").orEmpty(),
-                password = sp.getString(K_PWD, "").orEmpty(),
-                dir = sp.getString(K_DIR, "Await").orEmpty()
-            ),
             autoEnabled = sp.getBoolean(K_AUTO, false),
             intervalDays = sp.getInt(K_INTERVAL, 1).coerceIn(1, 30),
             hour = sp.getInt(K_HOUR, 22).coerceIn(0, 23),
@@ -82,10 +79,6 @@ object BackupSettings {
     /** 保存用户可编辑的部分（不动「上次备份结果」） */
     fun save(context: Context, prefs: Prefs) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(K_URL, prefs.webdav.url.trim())
-            .putString(K_USER, prefs.webdav.user.trim())
-            .putString(K_PWD, prefs.webdav.password)
-            .putString(K_DIR, prefs.webdav.dir.trim())
             .putBoolean(K_AUTO, prefs.autoEnabled)
             .putInt(K_INTERVAL, prefs.intervalDays)
             .putInt(K_HOUR, prefs.hour)

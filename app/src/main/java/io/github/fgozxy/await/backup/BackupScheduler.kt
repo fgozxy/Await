@@ -5,6 +5,10 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.work.*
+import io.github.fgozxy.await.sync.CloudDeployment
+import io.github.fgozxy.await.sync.ServerException
+import java.util.concurrent.TimeUnit
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -35,8 +39,9 @@ object BackupScheduler {
         val prefs = BackupSettings.load(context)
         val pi = pendingIntent(context)
 
-        if (!prefs.autoEnabled || !prefs.webdav.isValid) {
+        if (!prefs.autoEnabled || !CloudDeployment.canWriteBackup(context)) {
             am.cancel(pi)
+            WorkManager.getInstance(context).cancelUniqueWork("await-cloud-backup")
             return
         }
         val now = LocalDateTime.now()
@@ -66,7 +71,7 @@ object BackupScheduler {
 
     /** 下一次自动备份的展示文本；未开启返回 null */
     fun nextTriggerText(prefs: BackupSettings.Prefs): String? {
-        if (!prefs.autoEnabled || !prefs.webdav.isValid) return null
+        if (!prefs.autoEnabled) return null
         val t = toLocal(nextTriggerMillis(prefs))
         return "%04d-%02d-%02d %02d:%02d".format(t.year, t.monthValue, t.dayOfMonth, t.hour, t.minute)
     }
@@ -90,20 +95,34 @@ object BackupScheduler {
     )
 }
 
-/** 定时备份闹钟入口：后台执行一次备份，然后排下一次 */
+/** 广播只入队，联网上传交给 WorkManager，避免广播结束后进程被回收。 */
 class BackupAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
-        val pending = goAsync()
-        Thread {
-            try {
-                BackupService.backupNow(app, manual = false)
-            } finally {
-                // 失败也照常排下一次，但不走「补做」分支，避免短周期重试
-                BackupScheduler.reschedule(app, allowCatchUp = false)
-                pending.finish()
-            }
-        }.start()
+        val prefs = BackupSettings.load(app)
+        if (prefs.autoEnabled && CloudDeployment.canWriteBackup(app)) {
+            val work = OneTimeWorkRequestBuilder<CloudBackupWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(
+                    if (prefs.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
+            WorkManager.getInstance(app).enqueueUniqueWork("await-cloud-backup", ExistingWorkPolicy.KEEP, work)
+        }
+        BackupScheduler.reschedule(app, allowCatchUp = false)
+    }
+}
+
+class CloudBackupWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
+    override fun doWork(): Result {
+        if (!BackupSettings.load(applicationContext).autoEnabled || !CloudDeployment.canWriteBackup(applicationContext)) {
+            return Result.success()
+        }
+        val result = BackupService.backupNow(applicationContext, manual = false)
+        BackupScheduler.reschedule(applicationContext, allowCatchUp = false)
+        return when {
+            result.isSuccess -> Result.success()
+            (result.exceptionOrNull() as? ServerException)?.retryable == true && runAttemptCount < 3 -> Result.retry()
+            else -> Result.failure()
+        }
     }
 }

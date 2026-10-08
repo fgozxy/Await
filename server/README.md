@@ -1,8 +1,8 @@
-# Await 通知服务端
+# Await 云端服务
 
 手机同步日程后，由服务器按手机的 IANA 时区定时向所选的 Telegram / ntfy 渠道推送。手机关机不影响已经同步的日程；离线新增、修改、删除的日程需在手机联网同步成功后生效。
 
-Python 3.12 实现，SQLite 持久化日程和发送队列，`cryptography` 提供渠道凭据加密。支持独立渠道选择、分别重试、当天 / 提前多天提醒、日 / 周 / 月 / 年循环、合并推送。月末和闰日以原始日期为锚点，不逐月漂移。提醒周期由服务器继续计算，不依赖手机持续上传。
+Python 3.12 实现，SQLite 持久化日程、发送队列和可选云端备份，`cryptography` 提供渠道凭据和备份加密。支持独立渠道选择、分别重试、当天 / 提前多天提醒、日 / 周 / 月 / 年循环、合并推送。月末和闰日以原始日期为锚点，不逐月漂移。提醒周期由服务器继续计算，不依赖手机持续上传。
 
 ## 部署
 
@@ -10,6 +10,7 @@ Python 3.12 实现，SQLite 持久化日程和发送队列，`cryptography` 提�
 
 | 环境变量 | 用途 |
 |---|---|
+| `AWAIT_BACKUP_ENABLED` | 是否开启云端备份，默认 `false`；支持 `true` / `false` / `1` / `0` |
 | `AWAIT_API_KEY` | 手机访问密钥，至少 32 位 ASCII，不含空白 |
 | `TELEGRAM_BOT_TOKEN` | 启用 Telegram 时配置：BotFather 创建的机器人 Token |
 | `TELEGRAM_CHAT_ID` | 启用 Telegram 时配置：收件人的数字 Chat ID，或群 / 频道的 `@username` |
@@ -37,6 +38,27 @@ docker compose up -d --build
 
 服务端 SQLite 位于 Docker 的 `schedule_data` 卷，容器重建会保留。备份此卷时停止服务或使用 SQLite backup API，避免复制正在写入的单个数据库文件。
 
+## 可选云端备份
+
+在部署时选择开启，访问密钥仍通过凭据库注入进程环境：
+
+```bash
+cd server
+AWAIT_BACKUP_ENABLED=true docker compose up -d --build
+```
+
+手机「云端部署配置」的部署指引也提供相同开关和可复制的命令。该选项只生成命令，需在服务器执行，再点击手机的「验证连接并保存」。验证后在「备份与恢复」立即上传、查看历史或恢复最新备份，无需另配账号、路径或密码。不需要开启 Telegram / ntfy，也可单独使用云端备份。
+
+此开关在创建 / 重建容器时从进程环境读取；后续重建时继续提供 `AWAIT_BACKUP_ENABLED=true`，或在部署工具中保存这个非敏感设置。设为 `false` 重建后接口关闭，原有历史保留，重新开启后可继续恢复。容器普通重启沿用已保存的环境变量。
+
+备份内容使用手机 JSON 导出格式，包含所有日程字段、显式空分组和合并通知组，不含云端连接或消息渠道密钥。每次上传写入独立历史版本，并在同一 SQLite 事务内按手机设置保留最近 1–100 份（手机提供 5 / 10 / 20 / 50 份）；改变保留份数在下次成功备份时生效。历史按服务器接收时间排序，文件名含 UTC 时间和唯一编号，手机显示本地时间。最新备份直接读取最新历史，不另写一个可能失败的副本。
+
+数据库 `cloud_backups` 表仅存加密内容与索引元数据，使用随机 nonce 和独立 HKDF 派生的 AES-256-GCM 密钥。访问密钥需与数据卷一起保管；错误密钥或被篡改的密文不会静默恢复为空备份。备份功能与提醒队列独立，上传、读取或恢复文件不会更改服务器通知计划；手机确认导入后才进行正常日程同步。
+
+定时备份由手机 AlarmManager 触发、WorkManager 在满足网络条件时上传完整本地数据；服务器不会凭通知快照生成缺少分组、颜色等信息的备份。手机关机时不产生新上传，重新启动后补做已逾期的备份。开启云端存储不代表开启手机定时任务，需在手机另行选择周期与时刻。
+
+同一实例只允许绑定手机上传。持有相同访问密钥的新手机可验证连接并恢复历史，但不能覆盖旧日程或上传新备份，需先完成绑定迁移并重新验证。若先上传备份、尚未同步日程，也会记录手机绑定。旧 WebDAV 部署和文件不会被删除；下载旧 JSON 后用「导入日程 → 从文件导入」恢复，再上传到 Await 云端。旧定时开关与明文 WebDAV 凭据在手机升级后清除，定时偏好保留但需重新开启。
+
 ## 送达和迁移
 
 - 网络失败、各渠道的 429 / 5xx 会退避重试；重启后恢复待发提醒，并补发过去 24 小时内未送达的提醒。更旧的提醒标记失败，不批量补发。
@@ -44,7 +66,7 @@ docker compose up -d --build
 - 每个渠道单独记录成功状态；一个渠道失败不会重复推送另一渠道已经成功的提醒。已成功的提醒不会因正常重启或重复同步再次发送。远端发布接口不提供此队列使用的幂等键，发送成功但连接丢失，或发送后进程立即崩溃时，重试可能重复送达。
 - 关闭渠道会删除它尚未发送的提醒，保留成功记录；重新开启只恢复当前和未来待发提醒。关闭全部云端渠道后服务器继续保存日程，但不生成发送任务。
 - 日程修改 / 删除会取消相应未发送的提醒；合并或解散分组后同步也会重新计算待发队列。
-- 一个服务端实例绑定一个手机安装 ID。另一台手机会收到 409，避免误覆盖已有日程。迁移时先备份数据库与手机日程，停止服务，修改 SQLite `snapshot.body` 的 `clientId` 为新手机 ID，并使新手机的同步版本高于旧版本，然后再同步。不要删除备份；同一个手机的调试版和正式版也是不同安装。
+- 一个服务端实例绑定一个手机安装 ID。另一台手机会收到 409，避免误覆盖已有日程。迁移时先备份数据库与手机日程，停止服务，修改 SQLite `snapshot.body` 的 `clientId` 和 `backup_owner.client_id`（若存在）为新手机 ID，并使新手机的同步版本高于旧版本，然后再同步。不要删除备份；同一个手机的调试版和正式版也是不同安装。
 - 更换服务器后应停用旧服务器，否则旧服务器仍会按其保存的日程推送。
 
 ## API
@@ -54,12 +76,16 @@ docker compose up -d --build
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | PUT | `/v1/schedule` | 原子替换手机日程快照、合并组与 `notificationChannels`（`telegram` / `ntfy`，可为空） |
-| GET | `/v1/status` | 日程数量、队列状态、最近错误、`notificationProtocol: 1`、`availableChannels` 和 `channelConfiguration` |
+| GET | `/v1/status` | 日程数量、队列状态、最近错误、`notificationProtocol: 1`、`availableChannels`、`channelConfiguration`、`backupEnabled` / `backupProtocol` |
 | GET | `/v1/channels` | 渠道就绪状态、配置来源与非密钥参数，不返回 Token |
 | PUT | `/v1/channels/telegram` | 加密保存 `botToken` / `chatId`；Token 留空保留已有值 |
 | PUT | `/v1/channels/ntfy` | 加密保存 `url` / `topic` / 可选 `token`；`clearToken: true` 清除 Token |
 | POST | `/v1/channels/{telegram,ntfy}/test` | 测试填写的参数，不保存，不修改正式配置 |
 | POST | `/v1/test` | 请求体可指定 `notificationChannels`；逐渠道发送测试并返回 `results` / `ok`，不会改动正式渠道选择 |
+| POST | `/v1/backups` | 开启备份时接受 `{clientId, keepCount, backup}`，`backup` 为完整 Await JSON 导出对象；返回历史编号与元数据 |
+| GET | `/v1/backups` | 开启备份时返回 `backups` 数组，按新到旧排列，含 `id` / `name` / `createdAt`（毫秒）/ `eventCount` / `size` |
+| GET | `/v1/backups/{id}` | 下载指定备份的 JSON 导出对象 |
+| GET | `/v1/backups/latest` | 下载最新备份；无历史返回 404 |
 | GET | `/healthz` | 进程健康检查 |
 
 验证：

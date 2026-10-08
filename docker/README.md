@@ -1,4 +1,6 @@
-# Await 自建 WebDAV 备份盘
+# Await 旧版 WebDAV 备份盘
+
+此目录保留给旧版本和已有数据使用。Await v2.3.0 起，手机备份改用 [Await 云端服务](../server/README.md)，新部署请使用 `server/` 的 Docker Compose，并按需设置 `AWAIT_BACKUP_ENABLED=true`。已有 WebDAV 文件可下载后在手机「导入日程」中导入，本目录不会自动迁移或删除历史数据。以下配置与验证记录仅适用于旧版 WebDAV 功能。
 
 用一台 VPS（或家里的 NAS / 小主机）的本地磁盘，跑一个专给 Await 用的 WebDAV 服务，
 让「备份与恢复」里的云备份存到自己手里，不依赖第三方网盘。

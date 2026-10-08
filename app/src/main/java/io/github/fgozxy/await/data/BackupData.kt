@@ -14,7 +14,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * 备份文件的读写：把全部日程序列化成一个自描述的 JSON，供本地导入导出与 WebDAV 备份共用。
+ * 备份文件的读写：把全部日程序列化成一个自描述的 JSON，供本地导入导出与云端备份共用。
  *
  * 文件格式（formatVersion = 1）：
  * ```json
@@ -106,11 +106,11 @@ object BackupData {
 
     /** 生成备份 JSON 文本 */
     fun exportJson(context: Context): String {
-        val events = EventStore.load(context)
+        val events = EventStore.load(context, failOnUnreadable = true)
         val version = runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
         }.getOrDefault("")
-        return gson.toJson(
+        return encodePayload(
             Payload(
                 exportedAt = LocalDateTime.now().format(stampFormatter),
                 appVersion = version,
@@ -121,6 +121,8 @@ object BackupData {
             )
         )
     }
+
+    internal fun encodePayload(payload: Payload): String = gson.toJson(payload)
 
     /** 默认文件名：Await-backup-20260822-103000.json */
     fun defaultFileName(now: LocalDateTime = LocalDateTime.now()): String =

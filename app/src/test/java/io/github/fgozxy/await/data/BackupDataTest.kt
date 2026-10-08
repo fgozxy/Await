@@ -84,4 +84,24 @@ class BackupDataTest {
         assertEquals(emptyList<Event>(), bundle.events)
         assertEquals(listOf("稍后再用"), bundle.groups)
     }
+
+    @Test
+    fun fullCloudExportRoundtripPreservesScheduleAndDisplayFields() {
+        val events = listOf(
+            Event(id = 1, title = "生日", dateEpochDay = java.time.LocalDate.of(2026, 10, 7).toEpochDay(),
+                note = "保留备注", pinned = true, colorIndex = 3, groupName = "朋友",
+                repeatSpec = "YEAR:1", remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30),
+            Event(id = 2, title = "纪念日", dateEpochDay = java.time.LocalDate.of(2026, 10, 7).toEpochDay(),
+                remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30)
+        )
+        val payload = BackupData.Payload(events = events, eventCount = events.size,
+            groups = listOf("朋友", "空分组"), mergeGroups = listOf(MergeGroup(10, listOf(1, 2))))
+        val json = BackupData.encodePayload(payload)
+        val restored = BackupData.parseBundle(json).getOrThrow()
+        assertEquals(events, restored.events)
+        assertEquals(payload.groups, restored.groups)
+        assertEquals(payload.mergeGroups, restored.mergeGroups)
+        val fields = com.google.gson.JsonParser.parseString(json).asJsonObject.keySet()
+        assertEquals(setOf("app", "formatVersion", "exportedAt", "appVersion", "eventCount", "events", "groups", "mergeGroups"), fields)
+    }
 }

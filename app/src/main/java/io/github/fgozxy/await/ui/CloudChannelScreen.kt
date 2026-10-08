@@ -75,11 +75,11 @@ fun CloudChannelScreen(channel: NotificationChannel, onDismiss: () -> Unit) {
             try {
                 val taskResult = withContext(Dispatchers.IO) {
                     val path = "/v1/channels/${channel.wireName}" + if (test) "/test" else ""
-                    val response = ServerClient.request(config, if (test) "POST" else "PUT", path, Gson().toJson(body))
+                    ServerClient.request(config, if (test) "POST" else "PUT", path, Gson().toJson(body))
                     if (test) "测试消息已发送，请在 ${channel.label} 中确认收到；填写的参数尚未保存" else {
-                        val available = response["channels"].asJsonObject.entrySet()
-                            .filter { it.value.asJsonObject["configured"].asBoolean }.map { it.key }.toSet()
-                        CloudDeployment.record(context, config, CloudDeployment.Status(available, true))
+                        val status = ServerClient.request(config, "GET", "/v1/status")
+                        CloudDeployment.record(context, config,
+                            CloudDeployment.parse(status, SyncSettings.clientId(context)))
                         SyncCoordinator.changed(context)
                         "渠道参数已加密保存到服务器。返回通知设置勾选渠道并保存即可开启"
                     }

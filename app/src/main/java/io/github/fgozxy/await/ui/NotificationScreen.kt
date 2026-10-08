@@ -63,6 +63,7 @@ fun rememberSyncStatus(): String {
         if (NotificationChannels.remote(channels).isNotEmpty() || SyncSettings.load(context).isValid) {
             messages += when {
                 !CloudDeployment.isReady(context) -> "请先完成云端部署配置并验证连接"
+                !CloudDeployment.canSync(context) -> "当前连接仅可恢复备份；通知同步需先迁移手机绑定"
                 !sp.getString("last_error", "").isNullOrEmpty() -> sp.getString("last_error", "").orEmpty()
                 sp.getLong("revision", 0) > sp.getLong("synced_revision", 0) -> "云端设置等待同步；服务器仍按上次设置提醒"
                 NotificationChannels.remote(channels).isEmpty() -> "云端通知已关闭"
@@ -103,7 +104,7 @@ fun NotificationScreen(onDismiss: () -> Unit) {
     fun save() {
         if (channels.isEmpty()) { result = "请至少选择一种通知渠道"; return }
         val remote = NotificationChannels.remote(channels)
-        if (remote.isNotEmpty() && !CloudDeployment.isReady(context)) {
+        if (remote.isNotEmpty() && !CloudDeployment.canSync(context)) {
             result = "请先完成云端部署配置并验证连接"
             return
         }
@@ -201,7 +202,7 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                 }
                 HorizontalDivider()
                 Text("第一步：云端部署配置", style = MaterialTheme.typography.titleMedium)
-                val deployed = CloudDeployment.isReady(context)
+                val deployed = CloudDeployment.canSync(context)
                 Text(if (deployed) "云端连接已验证。可继续配置消息渠道。" else
                     "先部署 Await 服务并验证连接，再配置 Telegram 和 ntfy。软件通知可独立使用。")
                 Button(onClick = { showCloud = true }, enabled = !busy) {

@@ -3,94 +3,88 @@ package io.github.fgozxy.await.backup
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import io.github.fgozxy.await.data.BackupData
-import io.github.fgozxy.await.data.EventStore
-import java.time.LocalDateTime
+import io.github.fgozxy.await.sync.CloudDeployment
+import io.github.fgozxy.await.sync.ServerClient
+import io.github.fgozxy.await.sync.SyncCoordinator
+import io.github.fgozxy.await.sync.SyncSettings
+import java.time.Instant
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/**
- * 备份的执行逻辑：把本地日程打包成 JSON 上传到 WebDAV，或反过来从云端拉回来。
- * 全部是阻塞调用，由调用方（协程 IO 线程 / 广播的后台线程）负责线程切换。
- */
+/** 复用 Await 云端连接，备份完整日程与分组；调用方负责切换到 IO 线程。 */
 object BackupService {
+    const val LATEST_NAME = "latest"
+    private val uploadLock = Any()
 
-    /** 固定名字的「最新备份」，恢复时即使无法列目录也总能取到 */
-    const val LATEST_NAME = "Await-backup-latest.json"
+    data class Entry(val id: String, val name: String, val createdAt: Long, val size: Long, val eventCount: Int) {
+        fun modifiedText(): String = Instant.ofEpochMilli(createdAt).atZone(ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+        fun sizeText(): String = if (size < 1024) "$size B" else "%.1f KB".format(size / 1024.0)
+    }
 
-    private val stampFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+    internal fun parseEntries(response: JsonObject): List<Entry> = response["backups"].asJsonArray.map {
+        val value = it.asJsonObject
+        val id = value["id"].asString
+        require(Regex("[a-f0-9]{32}").matches(id)) { "备份编号无效" }
+        Entry(id, value["name"].asString, value["createdAt"].asLong, value["size"].asLong,
+            value["eventCount"].asInt)
+    }
 
-    /** 带时间戳的历史备份文件名 */
-    private fun snapshotName(now: LocalDateTime = LocalDateTime.now()) =
-        "Await-backup-${now.format(stampFormatter)}.json"
+    private fun verifiedConfig(context: Context, write: Boolean = false): SyncSettings.Config {
+        check(CloudDeployment.isReady(context)) { "请先在云端部署配置中验证连接" }
+        val config = SyncSettings.load(context)
+        val status = CloudDeployment.parse(ServerClient.request(config, "GET", "/v1/status"),
+            SyncSettings.clientId(context), allowBackupRecovery = true)
+        CloudDeployment.record(context, config, status)
+        check(status.backupsEnabled) { "服务器未开启云端备份，请在 Docker 部署时设置 AWAIT_BACKUP_ENABLED=true" }
+        check(!write || status.canSync) { "服务器绑定另一台手机，当前仅可恢复备份；上传需先迁移绑定" }
+        return config
+    }
 
-    /**
-     * 执行一次备份。成功返回给用户看的说明文字。
-     * @param manual 手动触发时忽略「仅 WLAN」限制
-     */
-    fun backupNow(context: Context, manual: Boolean): Result<String> {
+    fun backupNow(context: Context, manual: Boolean): Result<String> = synchronized(uploadLock) {
         val prefs = BackupSettings.load(context)
-        val cfg = prefs.webdav
-        val result: Result<String> = runCatching {
-            if (!cfg.isValid) error("尚未配置 WebDAV 服务器")
+        val result = runCatching {
             if (!manual && prefs.wifiOnly && !isOnWifi(context)) error("当前不是 WLAN 网络，已跳过")
             if (!isOnline(context)) error("网络不可用")
-
-            val json = BackupData.exportJson(context)
-            val bytes = json.toByteArray(Charsets.UTF_8)
-            val count = EventStore.load(context).size
-
-            // 目录可能已存在，建目录失败不阻断上传，让 PUT 的报错来说明真正原因
-            WebDavClient.ensureDir(cfg)
-
-            val name = snapshotName()
-            WebDavClient.put(cfg, name, bytes).getOrThrow()
-            // 最新副本失败不算整体失败：历史快照已经传上去了
-            WebDavClient.put(cfg, LATEST_NAME, bytes)
-            cleanup(cfg, prefs.keepCount)
-
-            "已备份 $count 条日程 · $name"
+            val config = verifiedConfig(context, write = true)
+            val bundle = synchronized(SyncCoordinator.lock) {
+                JsonParser.parseString(BackupData.exportJson(context)).asJsonObject
+            }
+            val body = JsonObject().apply {
+                addProperty("clientId", SyncSettings.clientId(context))
+                addProperty("keepCount", prefs.keepCount)
+                add("backup", bundle)
+            }
+            val saved = ServerClient.request(config, "POST", "/v1/backups", body.toString())
+            "已备份 ${bundle["eventCount"].asInt} 条日程 · ${saved["name"].asString}"
         }
-        BackupSettings.recordResult(
-            context,
-            ok = result.isSuccess,
-            message = result.getOrElse { it.message ?: "备份失败" }
-        )
-        return result
+        BackupSettings.recordResult(context, result.isSuccess,
+            result.getOrElse { it.message ?: "备份失败" })
+        result
     }
 
-    /** 云端备份列表（最新在前），不含固定名的最新副本 */
-    fun listBackups(context: Context): Result<List<WebDavClient.Entry>> {
-        val cfg = BackupSettings.load(context).webdav
-        if (!cfg.isValid) return Result.failure(IllegalStateException("尚未配置 WebDAV 服务器"))
-        return WebDavClient.list(cfg)
+    fun listBackups(context: Context): Result<List<Entry>> = runCatching {
+        parseEntries(ServerClient.request(verifiedConfig(context), "GET", "/v1/backups"))
     }
 
-    /**
-     * 下载云端某个备份并解析成日程（不落库，交给界面确认导入方式）。
-     * name 传 [LATEST_NAME] 即取固定名的最新副本——服务器不支持 PROPFIND 列目录时的兜底路径。
-     */
-    fun fetchBackup(context: Context, name: String): Result<BackupData.ImportBundle> {
-        val cfg = BackupSettings.load(context).webdav
-        if (!cfg.isValid) return Result.failure(IllegalStateException("尚未配置 WebDAV 服务器"))
-        return WebDavClient.get(cfg, name).mapCatching { BackupData.parseBundle(it).getOrThrow() }
-    }
-
-    /** 超出保留份数的历史快照从旧到新删除（list 已按时间倒序）；失败静默忽略 */
-    private fun cleanup(cfg: WebDavConfig, keep: Int) {
-        val all = WebDavClient.list(cfg).getOrNull() ?: return
-        all.filter { it.name != LATEST_NAME && it.name.startsWith("Await-backup-") }
-            .drop(keep)
-            .forEach { WebDavClient.delete(cfg, it.name) }
+    /** 只下载和解析，由界面确认合并或覆盖后才修改本地数据。 */
+    fun fetchBackup(context: Context, id: String): Result<BackupData.ImportBundle> = runCatching {
+        require(id == LATEST_NAME || Regex("[a-f0-9]{32}").matches(id)) { "备份编号无效" }
+        val bundle = ServerClient.request(verifiedConfig(context), "GET", "/v1/backups/$id")
+        BackupData.parseBundle(bundle.toString()).getOrThrow()
     }
 
     private fun isOnline(context: Context): Boolean {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return true
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun isOnWifi(context: Context): Boolean {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return true
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)

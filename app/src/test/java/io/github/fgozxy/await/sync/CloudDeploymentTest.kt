@@ -31,6 +31,34 @@ class CloudDeploymentTest {
         val result = CloudDeployment.parse(status("""{"notificationProtocol":1,"clientId":"phone","availableChannels":["telegram"]}"""), "phone")
         assertEquals(setOf("telegram"), result.availableChannels)
         assertFalse(result.managesChannels)
+        assertFalse(result.backupsEnabled)
+        assertTrue(result.canSync)
+    }
+
+    @Test
+    fun backupAvailabilityRequiresEnabledFeatureAndSupportedProtocol() {
+        for (suffix in listOf("", ",\"backupEnabled\":false,\"backupProtocol\":1",
+                ",\"backupEnabled\":true,\"backupProtocol\":2", ",\"backupEnabled\":true")) {
+            val result = CloudDeployment.parse(status("""{"notificationProtocol":1,"availableChannels":[]$suffix}"""), "phone")
+            assertFalse(result.backupsEnabled)
+        }
+        val result = CloudDeployment.parse(status("""{"notificationProtocol":1,"availableChannels":[],"backupEnabled":true,"backupProtocol":1}"""), "phone")
+        assertTrue(result.backupsEnabled)
+        assertTrue(result.canSync)
+    }
+
+    @Test
+    fun anotherPhoneMayConnectForBackupRecoveryWithoutWriteAccess() {
+        val response = status("""{"notificationProtocol":1,"availableChannels":["telegram"],"clientId":"old-phone","backupEnabled":true,"backupProtocol":1}""")
+        val result = CloudDeployment.parse(response, "new-phone", allowBackupRecovery = true)
+        assertTrue(result.backupsEnabled)
+        assertFalse(result.canSync)
+    }
+
+    @Test(expected = ServerException::class)
+    fun recoveryModeDoesNotAllowForeignBindingWhenBackupIsDisabled() {
+        CloudDeployment.parse(status("""{"notificationProtocol":1,"availableChannels":[],"clientId":"other","backupEnabled":false,"backupProtocol":1}"""),
+            "phone", allowBackupRecovery = true)
     }
 
     @Test(expected = ServerException::class)

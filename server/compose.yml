@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       AWAIT_API_KEY: ${AWAIT_API_KEY:?从凭据库注入 AWAIT_API_KEY}
+      AWAIT_BACKUP_ENABLED: ${AWAIT_BACKUP_ENABLED:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       NTFY_URL: ${NTFY_URL:-}

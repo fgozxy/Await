@@ -43,6 +43,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : Worker(contex
     override fun doWork(): Result {
         val config = SyncSettings.load(applicationContext)
         if (!config.isValid) return Result.success()
+        if (CloudDeployment.isReady(applicationContext) && !CloudDeployment.canSync(applicationContext)) return Result.success()
         val sp = SyncSettings.prefs(applicationContext)
         return try {
             val (revision, payload) = SyncCoordinator.snapshot(applicationContext)

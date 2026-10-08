@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
+from await_backup import BackupStore, backup_enabled
 
 UTC = timezone.utc
 MAX_BODY = 4 * 1024 * 1024
@@ -384,6 +385,7 @@ class ScheduleStore:
         self.lock, self.clock = threading.RLock(), clock
         self.senders = sender if isinstance(sender, dict) else {"telegram": sender}
         self.channel_settings = None
+        self.backups = None
         self._last_generated = None
 
     def snapshot(self):
@@ -400,7 +402,8 @@ class ScheduleStore:
             raise ValueError("Selected channel is not configured on server")
         with self.lock, self.db:
             old = self.snapshot()
-            if old and body["clientId"] != old["clientId"]:
+            backup_owner = self.backups.owner() if self.backups and not old else ""
+            if (old and body["clientId"] != old["clientId"]) or (backup_owner and backup_owner != body["clientId"]):
                 raise PermissionError("服务端已绑定另一台手机")
             if old and body["revision"] < old["revision"]:
                 raise ValueError("Stale revision")
@@ -486,10 +489,12 @@ class ScheduleStore:
                 "SELECT state,count(*) AS n FROM jobs GROUP BY state")}
             last = self.db.execute("SELECT error FROM jobs WHERE error!='' ORDER BY due DESC LIMIT 1").fetchone()
             return dict(revision=snapshot["revision"] if snapshot else 0,
+                        backupEnabled=bool(self.backups and self.backups.enabled),
+                        backupProtocol=1 if self.backups and self.backups.enabled else 0,
                         channelConfiguration=self.channel_settings is not None,
                         notificationProtocol=1, availableChannels=sorted(self.senders),
                         notificationChannels=snapshot["notificationChannels"] if snapshot else [],
-                        clientId=snapshot["clientId"] if snapshot else "",
+                        clientId=snapshot["clientId"] if snapshot else self.backups.owner() if self.backups else "",
                         eventCount=len(snapshot["events"]) if snapshot else 0,
                         pending=counts.get("pending", 0), failed=counts.get("failed", 0),
                         lastError=last["error"] if last else "",
@@ -539,6 +544,20 @@ def make_handler(store, api_key):
                     self.reply(200, store.status())
                 elif self.path == "/v1/channels" and store.channel_settings is not None:
                     self.reply(200, store.channel_settings.status())
+                elif self.path.startswith("/v1/backups"):
+                    if not store.backups or not store.backups.enabled:
+                        self.reply(404, dict(error="Cloud backup disabled"))
+                    elif self.path == "/v1/backups":
+                        self.reply(200, store.backups.list())
+                    elif re.fullmatch(r"/v1/backups/(latest|[a-f0-9]{32})", self.path):
+                        try:
+                            self.reply(200, store.backups.fetch(self.path.rsplit("/", 1)[1]))
+                        except FileNotFoundError:
+                            self.reply(404, dict(error="Backup not found"))
+                        except ValueError:
+                            self.reply(500, dict(error="Unable to read backup"))
+                    else:
+                        self.reply(404, dict(error="Not found"))
                 else:
                     self.reply(404, dict(error="Not found"))
 
@@ -569,6 +588,19 @@ def make_handler(store, api_key):
 
         def do_POST(self):
             if not self.authorized():
+                return
+            if self.path == "/v1/backups":
+                if not store.backups or not store.backups.enabled:
+                    self.reply(404, dict(error="Cloud backup disabled"))
+                    return
+                try:
+                    self.reply(201, store.backups.save(self.read_body()))
+                except PermissionError:
+                    self.reply(409, dict(error="Different client"))
+                except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+                    self.reply(400, dict(error="Invalid backup"))
+                except sqlite3.Error:
+                    self.reply(503, dict(error="Unable to save backup"))
                 return
             route = self.channel_route()
             if route and route[1] == "/test":
@@ -628,6 +660,7 @@ def main():
     if "ntfy" in senders:
         defaults["ntfy"] = dict(url=os.environ["NTFY_URL"], topic=os.environ["NTFY_TOPIC"], token=os.environ.get("NTFY_TOKEN", ""))
     store.channel_settings = ChannelSettings(store, key, defaults=defaults)
+    store.backups = BackupStore(store, key, enabled=backup_enabled(os.environ.get("AWAIT_BACKUP_ENABLED", "false")))
     stop = threading.Event()
 
     def scheduler():
