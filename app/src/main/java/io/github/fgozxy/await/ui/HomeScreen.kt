@@ -120,7 +120,7 @@ fun HomeScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 左滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和服务器提醒一起恢复
+    // 右滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和服务器提醒一起恢复
     fun deleteWithUndo(event: Event) {
         viewModel.delete(event.id)
         scope.launch {
@@ -730,9 +730,9 @@ private fun groupEvents(events: List<Event>): Groups {
 }
 
 /**
- * 左滑删除的包装：滑到底即触发 [onDelete]，滑出过程中露出红色底衬。
+ * 右滑删除的包装：滑到底即触发 [onDelete]，滑出过程中露出红色底衬。
  *
- * 始终从右往左滑，方向不随系统的文字布局方向改变。
+ * 始终从左往右滑，方向不随系统的文字布局方向改变。
  */
 @Composable
 private fun SwipeToDeleteBox(
@@ -740,7 +740,7 @@ private fun SwipeToDeleteBox(
     content: @Composable () -> Unit
 ) {
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val deleteDirection = if (isRtl) SwipeToDismissBoxValue.StartToEnd else SwipeToDismissBoxValue.EndToStart
+    val deleteDirection = if (isRtl) SwipeToDismissBoxValue.EndToStart else SwipeToDismissBoxValue.StartToEnd
     val currentDeleteDirection by rememberUpdatedState(deleteDirection)
     val currentOnDelete by rememberUpdatedState(onDelete)
     val state = rememberSwipeToDismissBoxState(
@@ -755,8 +755,8 @@ private fun SwipeToDeleteBox(
     )
     SwipeToDismissBox(
         state = state,
-        enableDismissFromStartToEnd = isRtl,
-        enableDismissFromEndToStart = !isRtl,
+        enableDismissFromStartToEnd = !isRtl,
+        enableDismissFromEndToStart = isRtl,
         backgroundContent = {
             Box(
                 Modifier
@@ -764,7 +764,7 @@ private fun SwipeToDeleteBox(
                     .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.errorContainer)
                     .padding(horizontal = 24.dp),
-                contentAlignment = AbsoluteAlignment.CenterRight
+                contentAlignment = AbsoluteAlignment.CenterLeft
             ) {
                 Icon(
                     Icons.Default.Delete,
