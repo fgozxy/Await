@@ -5,6 +5,7 @@ import androidx.work.*
 import io.github.fgozxy.await.data.EventStore
 import io.github.fgozxy.await.notify.LocalNotifications
 import io.github.fgozxy.await.notify.NotificationChannels
+import io.github.fgozxy.await.notify.ReminderSettings
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
@@ -34,7 +35,8 @@ object SyncCoordinator {
         val events = EventStore.load(context, failOnUnreadable = true)
         revision to SyncPayload.json(SyncSettings.clientId(context), revision,
             ZoneId.systemDefault().id, events,
-            NotificationChannels.remote(NotificationChannels.load(context)))
+            NotificationChannels.remote(NotificationChannels.load(context)),
+            ReminderSettings.load(context).localTime())
     }
 }
 

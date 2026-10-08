@@ -9,6 +9,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import io.github.fgozxy.await.sync.SyncCoordinator
+import io.github.fgozxy.await.notify.ReminderSettings
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -52,7 +53,8 @@ object BackupData {
         val eventCount: Int = 0,
         val events: List<Event> = emptyList(),
         /** v1.7.2 起备份显式创建的分组；旧备份没有该字段，解析时以 null 区分 */
-        val groups: List<String> = emptyList()
+        val groups: List<String> = emptyList(),
+        val defaultReminderTime: ReminderSettings.Time? = null
     ) {
         /** 保留旧云端备份协议字段，始终为空；不再导出或恢复旧通知合并设置。 */
         @Suppress("unused")
@@ -62,7 +64,8 @@ object BackupData {
     /** null 表示旧备份或裸数组里没有对应元数据。 */
     data class ImportBundle(
         val events: List<Event>,
-        val groups: List<String>? = null
+        val groups: List<String>? = null,
+        val defaultReminderTime: ReminderSettings.Time? = null
     )
 
     /**
@@ -83,6 +86,7 @@ object BackupData {
     "groupName": "分组名，没有就省略",
     "repeatSpec": "MONTH:1",
     "remindDaysBefore": [1],
+    "preciseTime": true,
     "remindHour": 9,
     "remindMinute": 0
   }
@@ -94,7 +98,7 @@ object BackupData {
 3. repeatSpec 取值 "DAY:N" "WEEK:N" "MONTH:N" "YEAR:N"，N 为间隔数；
    生日、纪念日用 "YEAR:1"；不重复的条目省略该字段。
 4. remindDaysBefore 是提前几天提醒的数组，0 表示当天，可多选，如 [0, 1, 7]。
-5. remindHour / remindMinute 是提醒时刻，省略则为 09:00。
+5. 只有截图明确指定提醒时刻时，才填写 preciseTime: true 和 remindHour / remindMinute；否则省略，跟随应用的默认通知时间。
 6. groupName 是分组名，如「生日」「订阅」；截图里有分类就照抄。"""
 
     /** 导入方式 */
@@ -117,7 +121,8 @@ object BackupData {
                 appVersion = version,
                 eventCount = events.size,
                 events = events,
-                groups = GroupStore.load(context)
+                groups = GroupStore.load(context),
+                defaultReminderTime = ReminderSettings.load(context)
             )
         )
     }
@@ -166,7 +171,21 @@ object BackupData {
                 raw.filterNotNull().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             }
         // 旧备份的 mergeGroups 字段忽略，日程与普通分组正常导入。
-        ImportBundle(normalizedEvents, groups)
+        val defaultTime = root.takeIf { it.isJsonObject }?.asJsonObject?.get("defaultReminderTime")?.let { element ->
+            require(element.isJsonObject) { "默认通知时间格式无效" }
+            val obj = element.asJsonObject
+            require(obj.keySet() == setOf("hour", "minute")) { "默认通知时间格式无效" }
+            fun integer(name: String): Int {
+                val value = obj[name]
+                require(value.isJsonPrimitive && value.asJsonPrimitive.isNumber &&
+                    value.asString.matches(Regex("\\d{1,2}"))) { "默认通知时间格式无效" }
+                return value.asInt
+            }
+            ReminderSettings.Time(integer("hour"), integer("minute")).also {
+                require(it.isValid) { "默认通知时间无效" }
+            }
+        }
+        ImportBundle(normalizedEvents, groups, defaultTime)
     }
 
     /**
@@ -242,8 +261,9 @@ object BackupData {
         context: Context,
         incoming: List<Event>,
         mode: Mode,
-        incomingGroups: List<String>? = null
-    ): ImportResult {
+        incomingGroups: List<String>? = null,
+        incomingDefaultTime: ReminderSettings.Time? = null
+    ): ImportResult = synchronized(SyncCoordinator.lock) {
         val current = EventStore.load(context)
 
         val result: List<Event>
@@ -264,6 +284,9 @@ object BackupData {
             }
             result = merged
         }
+        if (mode == Mode.REPLACE && incomingDefaultTime != null) {
+            ReminderSettings.save(context, incomingDefaultTime)
+        }
         EventStore.save(context, result)
         if (incomingGroups != null) {
             val safeGroups = incomingGroups.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
@@ -274,6 +297,6 @@ object BackupData {
             )
         }
         SyncCoordinator.changed(context)
-        return ImportResult(added, updated, result.size)
+        ImportResult(added, updated, result.size)
     }
 }

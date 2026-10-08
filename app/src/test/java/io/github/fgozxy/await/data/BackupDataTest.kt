@@ -98,18 +98,37 @@ class BackupDataTest {
         val events = listOf(
             Event(id = 1, title = "生日", dateEpochDay = java.time.LocalDate.of(2026, 10, 7).toEpochDay(),
                 note = "保留备注", pinned = true, colorIndex = 3, groupName = "朋友",
-                repeatSpec = "YEAR:1", remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30),
+                repeatSpec = "YEAR:1", remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30, preciseTime = true),
             Event(id = 2, title = "纪念日", dateEpochDay = java.time.LocalDate.of(2026, 10, 7).toEpochDay(),
                 remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30)
         )
         val payload = BackupData.Payload(events = events, eventCount = events.size,
-            groups = listOf("朋友", "空分组"))
+            groups = listOf("朋友", "空分组"), defaultReminderTime = io.github.fgozxy.await.notify.ReminderSettings.Time(11, 45))
         val json = BackupData.encodePayload(payload)
         val restored = BackupData.parseBundle(json).getOrThrow()
         assertEquals(events, restored.events)
         assertEquals(payload.groups, restored.groups)
+        assertEquals(payload.defaultReminderTime, restored.defaultReminderTime)
         assertEquals(0, com.google.gson.JsonParser.parseString(json).asJsonObject["mergeGroups"].asJsonArray.size())
         val fields = com.google.gson.JsonParser.parseString(json).asJsonObject.keySet()
-        assertEquals(setOf("app", "formatVersion", "exportedAt", "appVersion", "eventCount", "events", "groups", "mergeGroups"), fields)
+        assertEquals(setOf("app", "formatVersion", "exportedAt", "appVersion", "eventCount", "events", "groups", "mergeGroups", "defaultReminderTime"), fields)
+    }
+
+    @Test
+    fun legacyEventsFollowDefaultEvenWhenOldReminderTimeWasCustomized() {
+        val bundle = BackupData.parseBundle("""{"events":[{"id":1,"title":"旧日程","date":"2026-10-08","remindHour":14,"remindMinute":25}]}""").getOrThrow()
+        assertNull(bundle.defaultReminderTime)
+        org.junit.Assert.assertFalse(bundle.events.single().preciseTime)
+        assertEquals(java.time.LocalTime.of(11, 45), io.github.fgozxy.await.notify.ReminderTime.timeOf(
+            bundle.events.single(), java.time.LocalTime.of(11, 45)))
+    }
+
+    @Test
+    fun invalidBackupDefaultTimeIsRejectedBeforeImport() {
+        for (time in listOf("null", "[]", "{}", "{\"hour\":24,\"minute\":0}",
+            "{\"hour\":9,\"minute\":60}", "{\"hour\":true,\"minute\":0}",
+            "{\"hour\":\"9\",\"minute\":0}", "{\"hour\":9.5,\"minute\":0}")) {
+            assertTrue(BackupData.parseBundle("""{"events":[],"defaultReminderTime":$time}""").isFailure)
+        }
     }
 }

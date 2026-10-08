@@ -10,7 +10,7 @@ import java.time.ZoneId
 class LocalReminderPlanTest {
     private val zone = ZoneId.of("Asia/Shanghai")
     private val event = Event(id = 42, title = "生日", dateEpochDay = LocalDate.of(2026, 10, 8).toEpochDay(),
-        remindDaysBefore = listOf(0, 1), remindHour = 9, remindMinute = 30)
+        remindDaysBefore = listOf(0, 1), remindHour = 9, remindMinute = 30, preciseTime = true)
     private fun millis(time: String) = LocalDateTime.parse(time).atZone(zone).toInstant().toEpochMilli()
 
     @Test

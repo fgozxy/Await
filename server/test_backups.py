@@ -117,6 +117,30 @@ class BackupStoreTest(unittest.TestCase):
         self.backups.save(upload(data))
         self.assertEqual(data, self.backups.fetch('latest'))
 
+    def test_precision_and_default_time_roundtrip_alongside_legacy_backups(self):
+        legacy = self.backups.save(upload())
+        data = bundle()
+        data['defaultReminderTime'] = dict(hour=11, minute=45)
+        data['events'][0]['preciseTime'] = True
+        data['events'].append(dict(data['events'][0], id=456, preciseTime=False))
+        data['eventCount'] = 2
+        current = self.backups.save(upload(data))
+        self.assertEqual(data, self.backups.fetch(current['id']))
+        self.assertEqual(bundle(), self.backups.fetch(legacy['id']))
+
+    def test_invalid_default_time_or_precision_does_not_replace_backup(self):
+        saved = self.backups.save(upload())
+        for time in [None, [], {}, dict(hour=True, minute=0), dict(hour=24, minute=0),
+                     dict(hour=9, minute=60), dict(hour='9', minute=0), dict(hour=9, minute=0, token='synthetic')]:
+            with self.subTest(time=time), self.assertRaises(ValueError):
+                self.backups.save(upload(dict(bundle(), defaultReminderTime=time), keep=1))
+        for flag in [None, 0, 1, 'true', {}]:
+            data = bundle()
+            data['events'][0]['preciseTime'] = flag
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                self.backups.save(upload(data, keep=1))
+        self.assertEqual([saved], self.backups.list()['backups'])
+
     def test_missing_and_traversal_ids_do_not_resolve(self):
         for identity in ['latest', '../channel_settings', 'a' * 32, 'latest/../latest']:
             with self.assertRaises(FileNotFoundError):

@@ -43,6 +43,8 @@ data class Event(
     val remindDaysBefore: List<Int> = listOf(1),
     val remindHour: Int = 9,
     val remindMinute: Int = 0,
+    /** 旧记录缺少此字段时也保持关闭，统一跟随通知设置中的默认时间。 */
+    val preciseTime: Boolean = false,
     val repeatSpec: String? = null,
     // ── 以下为旧版遗留字段，只读兼容 ──
     val repeatCycle: String? = null,

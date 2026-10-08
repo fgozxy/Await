@@ -245,7 +245,8 @@ internal fun ImportConfirmDialog(
                     context,
                     bundle.events,
                     mode,
-                    bundle.groups
+                    bundle.groups,
+                    bundle.defaultReminderTime
                 )
             }
             viewModel.reload()
@@ -265,6 +266,10 @@ internal fun ImportConfirmDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("来源：$from", style = MaterialTheme.typography.bodySmall)
+                bundle.defaultReminderTime?.let {
+                    Text("备份默认通知时间：${it.display()}。覆盖导入会恢复此时间；合并导入沿用本机默认时间。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 BackupData.Mode.entries.forEach { mode ->
                     Column {
                         Text(mode.label, fontWeight = FontWeight.SemiBold)

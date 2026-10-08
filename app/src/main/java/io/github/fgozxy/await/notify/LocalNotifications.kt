@@ -73,7 +73,8 @@ object LocalNotifications {
             return@synchronized
         }
         val now = System.currentTimeMillis()
-        val plan = LocalReminderPlan.build(events, readPlan(context), now)
+        val plan = LocalReminderPlan.build(events, readPlan(context), now,
+            defaultTime = ReminderSettings.load(context).localTime())
         writePlan(context, plan)
         val due = LocalReminderPlan.nextAlarm(plan, now, allowed(context)) ?: return@synchronized
         try {
@@ -108,9 +109,10 @@ object LocalNotifications {
         val events = runCatching { EventStore.load(context, failOnUnreadable = true) }
             .getOrElse { return@synchronized }.associateBy { it.id }
         val zone = ZoneId.systemDefault()
+        val defaultTime = ReminderSettings.load(context).localTime()
         val plan = readPlan(context)
         val due = plan.filter { entry -> entry.due in (now - 86_400_000L)..now &&
-            events[entry.eventId]?.let { LocalReminderPlan.fingerprint(it, zone) == entry.fingerprint } == true }
+            events[entry.eventId]?.let { LocalReminderPlan.fingerprint(it, zone, defaultTime) == entry.fingerprint } == true }
         val consumed = mutableSetOf<PlannedReminder>()
         due.forEach { entry ->
             val date = Instant.ofEpochMilli(entry.due).atZone(zone).toLocalDate()

@@ -16,9 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
+import io.github.fgozxy.await.notify.ReminderSettings
 import io.github.fgozxy.await.ui.theme.EventColors
 import java.time.Instant
 import java.time.LocalDate
@@ -42,6 +44,8 @@ fun EditEventSheet(
     onSave: (Event) -> Unit,
     onDelete: () -> Unit
 ) {
+    val context = LocalContext.current
+    val defaultTime = remember { ReminderSettings.load(context) }
     var title by remember { mutableStateOf(initial?.title ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
@@ -57,8 +61,9 @@ fun EditEventSheet(
         // 默认「当天 + 提前1天」都提醒，避免只提前1天而日程就在今天时错过提醒
         mutableStateOf(initial?.remindDaysBefore?.toSet() ?: setOf(0, 1))
     }
-    var remindHour by remember { mutableIntStateOf(initial?.remindHour ?: 9) }
-    var remindMinute by remember { mutableIntStateOf(initial?.remindMinute ?: 0) }
+    var preciseTime by remember { mutableStateOf(initial?.preciseTime ?: false) }
+    var remindHour by remember { mutableIntStateOf(initial?.remindHour ?: defaultTime.hour) }
+    var remindMinute by remember { mutableIntStateOf(initial?.remindMinute ?: defaultTime.minute) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
@@ -243,19 +248,24 @@ fun EditEventSheet(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
+                ToggleRow("精准时间", preciseTime, "开启后自定义时刻；关闭时跟随通知设置的默认时间") {
+                    preciseTime = it
+                    if (!it) showTimePicker = false
+                }
                 Surface(
                     onClick = { showTimePicker = true },
+                    enabled = preciseTime,
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("提醒时刻", style = MaterialTheme.typography.labelMedium)
-                            Text("%02d:%02d".format(remindHour, remindMinute),
+                            Text(if (preciseTime) "自定义提醒时刻" else "默认通知时间", style = MaterialTheme.typography.labelMedium)
+                            Text(if (preciseTime) "%02d:%02d".format(remindHour, remindMinute) else defaultTime.display(),
                                 style = MaterialTheme.typography.titleMedium)
                         }
-                        Text("点击选择", style = MaterialTheme.typography.labelSmall)
+                        Text(if (preciseTime) "点击选择" else "在通知设置中修改", style = MaterialTheme.typography.labelSmall)
                     }
                 }
                 Text("通知渠道在「通知设置」中选择，可同时开启软件、Telegram 和 ntfy 通知", style = MaterialTheme.typography.bodySmall)
@@ -288,6 +298,7 @@ fun EditEventSheet(
                                 remindDaysBefore = remindDays.toList().sorted(),
                                 remindHour = remindHour,
                                 remindMinute = remindMinute,
+                                preciseTime = preciseTime,
                                 repeatSpec = if (cycle == Cycle.NONE) null else "${cycle.name}:$repN",
                                 groupName = group.trim()
                             )
@@ -323,7 +334,7 @@ fun EditEventSheet(
     }
 
     // 时间选择对话框
-    if (showTimePicker) {
+    if (showTimePicker && preciseTime) {
         val timeState = rememberTimePickerState(remindHour, remindMinute, true)
         AlertDialog(
             onDismissRequest = { showTimePicker = false },

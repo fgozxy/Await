@@ -32,6 +32,7 @@ import com.google.gson.Gson
 import io.github.fgozxy.await.notify.LocalNotifications
 import io.github.fgozxy.await.notify.NotificationChannel
 import io.github.fgozxy.await.notify.NotificationChannels
+import io.github.fgozxy.await.notify.ReminderSettings
 import io.github.fgozxy.await.sync.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -80,6 +81,8 @@ fun NotificationScreen(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var channels by remember { mutableStateOf(NotificationChannels.load(context)) }
+    var defaultTime by remember { mutableStateOf(ReminderSettings.load(context)) }
+    var showDefaultTimePicker by remember { mutableStateOf(false) }
     var showCloud by remember { mutableStateOf(false) }
     var configuringChannel by remember { mutableStateOf<NotificationChannel?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -177,7 +180,12 @@ fun NotificationScreen(onDismiss: () -> Unit) {
         }) { padding ->
             Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("可选择一个或多个通知渠道，所有日程使用这里的设置。提醒日期和时刻仍可在各日程中单独设置。")
+                Text("可选择一个或多个通知渠道。日程默认使用下方时刻，开启日程的「精准时间」后可单独设置。")
+                Text("默认通知时间", style = MaterialTheme.typography.titleMedium)
+                Text(defaultTime.display(), style = MaterialTheme.typography.headlineMedium)
+                Text("修改后，所有未开启精准时间的日程都会跟随；已开启的日程保留自定义时刻。")
+                OutlinedButton(onClick = { showDefaultTimePicker = true }, enabled = !busy) { Text("修改默认时间") }
+                HorizontalDivider()
                 Row(Modifier.fillMaxWidth().toggleable(value = NotificationChannel.LOCAL in channels, enabled = !busy,
                     role = Role.Checkbox, onValueChange = { enabled ->
                         channels = if (enabled) channels + NotificationChannel.LOCAL else channels - NotificationChannel.LOCAL
@@ -246,6 +254,33 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                 SelectionContainer { Text("本机安装 ID：${SyncSettings.clientId(context)}", style = MaterialTheme.typography.bodySmall) }
             }
         }
+    }
+    if (showDefaultTimePicker) {
+        val timeState = rememberTimePickerState(defaultTime.hour, defaultTime.minute, true)
+        AlertDialog(
+            onDismissRequest = { if (!busy) showDefaultTimePicker = false },
+            title = { Text("默认通知时间") },
+            text = { TimePicker(timeState) },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = {
+                    val selectedTime = ReminderSettings.Time(timeState.hour, timeState.minute)
+                    busy = true
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { ReminderSettings.save(context, selectedTime) }
+                            defaultTime = selectedTime
+                            showDefaultTimePicker = false
+                            result = "默认时间已保存，本机提醒已重排；云端联网同步后生效"
+                        } catch (_: Exception) {
+                            result = "保存默认时间失败，请重试"
+                        } finally {
+                            busy = false
+                        }
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { showDefaultTimePicker = false }) { Text("取消") } }
+        )
     }
     if (showCloud) CloudDeploymentScreen(onDismiss = { showCloud = false })
     configuringChannel?.let { channel ->

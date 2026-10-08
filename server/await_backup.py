@@ -20,8 +20,15 @@ def backup_enabled(value):
 def validate_bundle(body):
     # Only the export format is accepted: service credentials/settings cannot be uploaded accidentally.
     fields = {"app", "formatVersion", "exportedAt", "appVersion", "eventCount", "events", "groups", "mergeGroups"}
-    if not isinstance(body, dict) or set(body) != fields or body["app"] != "Await":
+    if (not isinstance(body, dict) or not fields <= set(body)
+            or not set(body) <= fields | {"defaultReminderTime"} or body["app"] != "Await"):
         raise ValueError("Invalid backup bundle")
+    if "defaultReminderTime" in body:
+        default_time = body["defaultReminderTime"]
+        if (not isinstance(default_time, dict) or set(default_time) != {"hour", "minute"}
+                or type(default_time["hour"]) is not int or not 0 <= default_time["hour"] <= 23
+                or type(default_time["minute"]) is not int or not 0 <= default_time["minute"] <= 59):
+            raise ValueError("Invalid default reminder time")
     if type(body["formatVersion"]) is not int or body["formatVersion"] != 1:
         raise ValueError("Unsupported backup format")
     for field in ("exportedAt", "appVersion"):
@@ -34,7 +41,7 @@ def validate_bundle(body):
         raise ValueError("Invalid backup event count")
     event_fields = {"id", "title", "dateEpochDay", "note", "pinned", "colorIndex", "remindDaysBefore",
                     "remindHour", "remindMinute", "repeatSpec", "repeatCycle", "repeatEveryDays",
-                    "repeatYearly", "groupName"}
+                    "repeatYearly", "groupName", "preciseTime"}
     ids = set()
     for event in events:
         if not isinstance(event, dict) or not set(event) <= event_fields:
@@ -49,7 +56,7 @@ def validate_bundle(body):
         for field in ("title", "note", "repeatSpec", "repeatCycle", "groupName"):
             if field in event and event[field] is not None and not isinstance(event[field], str):
                 raise ValueError("Invalid backup event text")
-        for field in ("pinned", "repeatYearly"):
+        for field in ("pinned", "repeatYearly", "preciseTime"):
             if field in event and type(event[field]) is not bool:
                 raise ValueError("Invalid backup event flag")
         for field, low, high in (("colorIndex", 0, 2**31 - 1), ("remindHour", 0, 23),

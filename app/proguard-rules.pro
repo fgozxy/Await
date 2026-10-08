@@ -3,6 +3,7 @@
 
 # Gson：备份文件的外层结构（导出/导入、云端备份都用它）
 -keep class io.github.fgozxy.await.data.BackupData$Payload { *; }
+-keep class io.github.fgozxy.await.notify.ReminderSettings$Time { *; }
 -keepattributes Signature
 -keepattributes *Annotation*
 
