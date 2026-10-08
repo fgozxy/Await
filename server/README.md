@@ -32,6 +32,8 @@ docker compose up -d --build
 
 仅启用 ntfy 时无需配置 Telegram 环境变量。使用环境变量时，Telegram 两个字段必须一起提供，ntfy 的地址与主题必须一起提供；手机选中的云端渠道必须已在服务器配置。ntfy 客户端需订阅相同的服务器和 Topic。发布协议参见 [ntfy 官方文档](https://docs.ntfy.sh/publish/#publish-as-json)，Telegram 使用 [sendMessage](https://core.telegram.org/bots/api#sendmessage)。
 
+ntfy 推送使用 `Await-Cloud/1.0` User-Agent，避免部分反向代理拒绝 Python urllib 的默认请求标识；认证仍通过所配置的 Bearer Token 进行。
+
 手机保存的渠道配置会覆盖同渠道的环境变量配置，重启后继续生效；Token 留空保留已有值，ntfy 可显式选择清除 Token。测试填写的参数不会修改正式配置或自动开启渠道。修改参数后无需重启服务，最近 24 小时内该渠道失败的提醒会重新尝试，成功记录保持不变。
 
 `AWAIT_API_KEY` 同时用于访问认证和配置加密，须与数据卷一起妥善保管。更换该密钥前需要迁移已有加密配置；直接替换后服务器会拒绝读取旧密文，不会回退到旧环境配置或覆盖密文。

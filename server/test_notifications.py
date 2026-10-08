@@ -143,6 +143,7 @@ class NtfyTest(unittest.TestCase):
             self.assertEqual('https://ntfy.example.test', req.full_url)
             self.assertEqual(15, timeout)
             self.assertEqual('Bearer synthetic-ntfy-token', req.get_header('Authorization'))
+            self.assertTrue(req.get_header('User-agent', '').startswith('Await-Cloud/'))
             body = json.loads(req.data)
             self.assertEqual('await-tests', body['topic'])
             self.assertEqual('中文 😺', body['message'])

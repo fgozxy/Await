@@ -245,7 +245,8 @@ class Ntfy:
         # JSON publishing preserves Unicode titles and avoids header encoding issues.
         payload = json.dumps(dict(topic=self._topic, title="Await 日程提醒", message=clip_ntfy_message(text)),
                              ensure_ascii=False).encode()
-        headers = {"Content-Type": "application/json; charset=utf-8"}
+        # Identify the application explicitly: some reverse proxies reject urllib's default User-Agent.
+        headers = {"Content-Type": "application/json; charset=utf-8", "User-Agent": "Await-Cloud/1.0"}
         if self._token:
             headers["Authorization"] = "Bearer " + self._token
         req = request.Request(self._url, data=payload, headers=headers)
