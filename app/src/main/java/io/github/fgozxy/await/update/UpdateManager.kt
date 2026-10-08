@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -29,10 +30,14 @@ object UpdateManager {
     fun currentVersion(context: Context): String = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
 
     suspend fun checkLatest(currentVersion: String): ReleaseInfo? = withContext(Dispatchers.IO) {
-        val release = try {
-            ReleaseInfo.parse(JsonParser.parseString(readText(ReleaseInfo.LATEST_API, 1024 * 1024)).asJsonObject)
-        } catch (e: UpdateException) { throw e }
-          catch (_: Exception) { throw UpdateException("发布版本信息不完整，请稍后重试") }
+        val release = UpdateSources.withFallback(ReleaseInfo.LATEST_API) { url ->
+            currentCoroutineContext().ensureActive()
+            try {
+                ReleaseInfo.parse(JsonParser.parseString(readText(url, 1024 * 1024)).asJsonObject)
+            } catch (e: CancellationException) { throw e }
+              catch (e: UpdateException) { throw e }
+              catch (_: Exception) { throw UpdateException("发布版本信息不完整，请稍后重试") }
+        }
         if (ReleaseInfo.isNewer(release.versionName, currentVersion)) release else null
     }
 
@@ -44,19 +49,28 @@ object UpdateManager {
             val part = File(folder, release.apkName + ".part.apk")
             val cancellation = currentCoroutineContext()
             try {
-                val checksum = UpdateIntegrity.checksum(readText(release.checksumUrl, 64 * 1024), release.apkName)
-                require(release.assetDigest == null || checksum == release.assetDigest) { "发布校验信息不一致，请稍后重试" }
-                val connection = open(release.apkUrl)
-                try {
-                    connection.inputStream.use { input ->
-                        part.outputStream().use { output ->
-                            UpdateIntegrity.copyVerified(input, output, release.sizeBytes, checksum, onProgress) { cancellation.ensureActive() }
-                            output.fd.sync()
+                val checksum = UpdateSources.withFallback(release.checksumUrl) { url ->
+                    cancellation.ensureActive()
+                    val hash = UpdateIntegrity.checksum(readText(url, 64 * 1024), release.apkName)
+                    require(release.assetDigest == null || hash == release.assetDigest) { "发布校验信息不一致，请稍后重试" }
+                    hash
+                }
+                UpdateSources.withFallback(release.apkUrl) { url ->
+                    cancellation.ensureActive()
+                    onProgress(0)
+                    val connection = open(url)
+                    try {
+                        connection.inputStream.use { input ->
+                            part.outputStream().use { output ->
+                                UpdateIntegrity.copyVerified(input, output, release.sizeBytes, checksum, onProgress) { cancellation.ensureActive() }
+                                output.fd.sync()
+                            }
                         }
-                    }
-                } finally { connection.disconnect() }
+                        cancellation.ensureActive()
+                        verifyPackage(context, part, release)
+                    } finally { connection.disconnect() }
+                }
                 cancellation.ensureActive()
-                verifyPackage(context, part, release)
                 check(part.renameTo(target)) { "无法保存安装包，请重试" }
                 onProgress(100)
                 target
@@ -124,11 +138,11 @@ object UpdateManager {
         repeat(6) { redirect ->
             require(ReleaseInfo.trustedDownloadUrl(url)) { "更新下载地址无效" }
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 15_000
-                readTimeout = 30_000
+                connectTimeout = 8_000
+                readTimeout = 20_000
                 instanceFollowRedirects = false
                 setRequestProperty("User-Agent", "Await-Android-Updater")
-                setRequestProperty("Accept", if (url == ReleaseInfo.LATEST_API) "application/vnd.github+json" else "application/octet-stream")
+                setRequestProperty("Accept", if (url.contains("api.github.com/repos/")) "application/vnd.github+json" else "application/octet-stream")
             }
             try {
                 val code = connection.responseCode

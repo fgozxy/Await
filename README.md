@@ -66,6 +66,7 @@
 - 打开软件时默认每天检查一次新版本，可在更新页面关闭；仅在点击「下载并安装」后下载安装包
 - 下载后校验 SHA-256、应用包名、版本和签名，再打开 Android 系统安装界面；首次安装需允许 Await 安装应用
 - 更新文件来自本仓库公开的 [GitHub Releases](https://github.com/fgozxy/Await/releases/latest)，无需 GitHub 账号或云端服务
+- v2.4.3 起，版本检查、校验文件及安装包下载优先走自托管 HubProxy（`hubproxy.zlibza.com`）；加速服务不可用或校验失败时自动回退 GitHub 原地址
 - v2.4.2 开始支持软件内更新；v2.4.0 / v2.4.1 用户首次手动安装 v2.4.2，之后可在软件内更新
 
 ## 🛠 技术栈

@@ -58,8 +58,9 @@ data class ReleaseInfo(
 
         fun trustedDownloadUrl(url: String): Boolean = runCatching {
             val uri = URI(url)
-            uri.scheme == "https" && uri.userInfo == null && uri.port in setOf(-1, 443) && uri.host in setOf(
-                "github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"
+            uri.scheme == "https" && uri.userInfo == null && uri.port in setOf(-1, 443) && (
+                uri.host in setOf("github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com") ||
+                    UpdateSources.trustedProxyUrl(url)
             )
         }.getOrDefault(false)
     }
