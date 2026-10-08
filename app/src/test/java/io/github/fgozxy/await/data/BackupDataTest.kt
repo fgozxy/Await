@@ -25,7 +25,7 @@ class BackupDataTest {
 
         assertEquals("", event.note)
         assertEquals(0, event.colorIndex)
-        assertEquals(listOf(1), event.remindDaysBefore)
+        assertEquals(listOf(0), event.remindDaysBefore)
         assertEquals(9, event.remindHour)
         assertEquals(0, event.remindMinute)
     }
@@ -56,6 +56,7 @@ class BackupDataTest {
         ).getOrThrow()
 
         assertNull(bundle.groups)
+        assertEquals(listOf(0), bundle.events.single().remindDaysBefore)
     }
 
     @Test

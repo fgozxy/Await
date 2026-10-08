@@ -40,7 +40,7 @@ data class Event(
     val note: String = "",
     val pinned: Boolean = false,
     val colorIndex: Int = 0,
-    val remindDaysBefore: List<Int> = listOf(1),
+    val remindDaysBefore: List<Int> = listOf(DEFAULT_REMIND_DAYS),
     val remindHour: Int = 9,
     val remindMinute: Int = 0,
     /** 旧记录缺少此字段时也保持关闭，统一跟随通知设置中的默认时间。 */
@@ -176,7 +176,7 @@ data class Event(
     }
 
     companion object {
-        private const val DEFAULT_REMIND_DAYS = 1
+        internal const val DEFAULT_REMIND_DAYS = 0
         private const val DEFAULT_REMIND_HOUR = 9
         private const val DEFAULT_REMIND_MINUTE = 0
         private const val MAX_REMIND_DAYS = 3650

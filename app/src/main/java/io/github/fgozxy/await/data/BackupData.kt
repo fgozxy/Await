@@ -85,7 +85,7 @@ object BackupData {
     "note": "备注，没有就省略",
     "groupName": "分组名，没有就省略",
     "repeatSpec": "MONTH:1",
-    "remindDaysBefore": [1],
+    "remindDaysBefore": [0],
     "preciseTime": true,
     "remindHour": 9,
     "remindMinute": 0
@@ -97,7 +97,7 @@ object BackupData {
 2. date 一律写成 YYYY-MM-DD。
 3. repeatSpec 取值 "DAY:N" "WEEK:N" "MONTH:N" "YEAR:N"，N 为间隔数；
    生日、纪念日用 "YEAR:1"；不重复的条目省略该字段。
-4. remindDaysBefore 是提前几天提醒的数组，0 表示当天，可多选，如 [0, 1, 7]。
+4. remindDaysBefore 是提前几天提醒的数组，0 表示当天，可多选，如 [0, 1, 7]；截图未明确指定时省略该字段，默认仅当天提醒。
 5. 只有截图明确指定提醒时刻时，才填写 preciseTime: true 和 remindHour / remindMinute；否则省略，跟随应用的默认通知时间。
 6. groupName 是分组名，如「生日」「订阅」；截图里有分类就照抄。"""
 
