@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -40,9 +41,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.theme.EventColors
 import io.github.fgozxy.await.vm.EventViewModel
+import io.github.fgozxy.await.update.AutoUpdate
+import io.github.fgozxy.await.update.ReleaseInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import android.widget.Toast
@@ -68,7 +75,22 @@ fun HomeScreen(
     var showImport by remember { mutableStateOf(false) }
     var showNotifications by remember { mutableStateOf(false) }
     var showCloudDeployment by remember { mutableStateOf(false) }
+    var showUpdate by remember { mutableStateOf(false) }
+    var availableUpdate by remember { mutableStateOf<ReleaseInfo?>(null) }
     val notificationHealth = rememberNotificationHealth()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) scope.launch {
+                try { availableUpdate = AutoUpdate.check(context) ?: availableUpdate }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* 自动检查失败时，仍可通过菜单手动检查。 */ }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
@@ -146,6 +168,11 @@ fun HomeScreen(
                         Icon(Icons.Default.MoreVert, "更多")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("软件更新") },
+                            onClick = { menuOpen = false; showUpdate = true },
+                            leadingIcon = { Icon(Icons.Default.SystemUpdate, null) }
+                        )
                         DropdownMenuItem(
                             text = { Text("云端部署配置") },
                             onClick = { menuOpen = false; showCloudDeployment = true },
@@ -625,6 +652,16 @@ fun HomeScreen(
 
     if (showCloudDeployment) CloudDeploymentScreen(onDismiss = { showCloudDeployment = false })
     if (showNotifications) NotificationScreen(onDismiss = { showNotifications = false })
+    if (showUpdate) UpdateScreen(initial = availableUpdate, onDismiss = { showUpdate = false; availableUpdate = null })
+    if (!showUpdate) availableUpdate?.let { update ->
+        AlertDialog(
+            onDismissRequest = { availableUpdate = null },
+            title = { Text("发现新版本 ${update.versionName}") },
+            text = { Text("可在软件内下载并安装更新。") },
+            confirmButton = { TextButton(onClick = { showUpdate = true }) { Text("查看更新") } },
+            dismissButton = { TextButton(onClick = { availableUpdate = null }) { Text("稍后") } }
+        )
+    }
 
 
 }
