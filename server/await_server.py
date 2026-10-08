@@ -1,5 +1,6 @@
 """Single-writer Await schedule API and durable per-channel delivery queues."""
 import calendar
+import base64
 import hashlib
 import hmac
 import json
@@ -12,6 +13,9 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, request, parse
 from zoneinfo import ZoneInfo
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 
 UTC = timezone.utc
 MAX_BODY = 4 * 1024 * 1024
@@ -280,6 +284,86 @@ class Ntfy:
             raise DeliveryError("无法连接 ntfy，请检查服务器网络") from None
 
 
+class ChannelSettings:
+    """Authenticated, encrypted channel settings; API reads never return secrets."""
+    def __init__(self, store, api_key, sender_factory=None, defaults=None):
+        self.store = store
+        self.factory = sender_factory or self.sender
+        key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"Await channel settings v1",
+                   info=b"AES-256-GCM channel credentials").derive(api_key.encode())
+        self.cipher = AESGCM(key)
+        self.configs = {}
+        self.defaults = defaults or {}
+        with store.lock, store.db:
+            store.db.execute("CREATE TABLE IF NOT EXISTS channel_settings (channel TEXT PRIMARY KEY, ciphertext BLOB NOT NULL)")
+            for row in store.db.execute("SELECT channel,ciphertext FROM channel_settings"):
+                channel, blob = row[0], row[1]
+                try:
+                    raw = json.loads(self.cipher.decrypt(blob[:12], blob[12:], channel.encode()))
+                    store.senders[channel] = self.factory(channel, raw)
+                except Exception:
+                    raise ValueError("Unable to decrypt channel settings; restore the original AWAIT_API_KEY") from None
+                self.configs[channel] = raw
+
+    @staticmethod
+    def sender(channel, config):
+        if channel == "telegram":
+            return Telegram(config["botToken"], config["chatId"])
+        if channel == "ntfy":
+            return Ntfy(config["url"], config["topic"], config.get("token", ""))
+        raise ValueError("Unknown channel")
+
+    def status(self):
+        with self.store.lock:
+            channels = {}
+            for channel in sorted(REMOTE_CHANNELS):
+                config = self.configs.get(channel, self.defaults.get(channel, {}))
+                metadata = dict(configured=channel in self.store.senders,
+                    source="app" if channel in self.configs else "environment" if channel in self.store.senders else "none")
+                fields = ("chatId",) if channel == "telegram" else ("url", "topic")
+                metadata.update({field: config.get(field, "") for field in fields})
+                channels[channel] = metadata
+            return dict(channels=channels)
+
+    def prepare(self, channel, raw):
+        if channel not in REMOTE_CHANNELS or not isinstance(raw, dict):
+            raise ValueError("Invalid channel configuration")
+        with self.store.lock:
+            old = self.configs.get(channel, self.defaults.get(channel, {}))
+            if channel == "telegram":
+                config = dict(botToken=raw.get("botToken") or old.get("botToken", ""),
+                              chatId=raw.get("chatId"))
+            else:
+                config = dict(url=raw.get("url"), topic=raw.get("topic"),
+                              token="" if raw.get("clearToken") is True else raw.get("token") or old.get("token", ""))
+            if any(not isinstance(value, str) or len(value) > 4096 for value in config.values()):
+                raise ValueError("Invalid channel fields")
+            if channel == "telegram" and not config["botToken"]:
+                raise ValueError("Bot token required")
+            sender = self.factory(channel, config)
+            return config, sender
+
+    def save(self, channel, raw):
+        with self.store.lock:
+            config, sender = self.prepare(channel, raw)
+            nonce = os.urandom(12)
+            encrypted = nonce + self.cipher.encrypt(nonce, canonical(config).encode(), channel.encode())
+            with self.store.db:
+                self.store.db.execute("INSERT OR REPLACE INTO channel_settings VALUES (?,?)", (channel, encrypted))
+                # Corrected credentials may revive failed deliveries within the catch-up window.
+                now = int(self.store.clock())
+                self.store.db.execute("UPDATE jobs SET state='pending',retry_at=0,error='' "
+                                      "WHERE channel=? AND state='failed' AND due>=?", (channel, now - 86400))
+            self.configs[channel] = config
+            self.store.senders[channel] = sender
+        return self.status()
+
+    def test(self, channel, raw):
+        _, sender = self.prepare(channel, raw)
+        sender.send("✅ Await 渠道配置测试\n通知链路正常。")
+        return dict(ok=True)
+
+
 class ScheduleStore:
     def __init__(self, path, sender, clock=time.time):
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -299,6 +383,7 @@ class ScheduleStore:
             self.db.commit()
         self.lock, self.clock = threading.RLock(), clock
         self.senders = sender if isinstance(sender, dict) else {"telegram": sender}
+        self.channel_settings = None
         self._last_generated = None
 
     def snapshot(self):
@@ -401,6 +486,7 @@ class ScheduleStore:
                 "SELECT state,count(*) AS n FROM jobs GROUP BY state")}
             last = self.db.execute("SELECT error FROM jobs WHERE error!='' ORDER BY due DESC LIMIT 1").fetchone()
             return dict(revision=snapshot["revision"] if snapshot else 0,
+                        channelConfiguration=self.channel_settings is not None,
                         notificationProtocol=1, availableChannels=sorted(self.senders),
                         notificationChannels=snapshot["notificationChannels"] if snapshot else [],
                         clientId=snapshot["clientId"] if snapshot else "",
@@ -435,17 +521,36 @@ def make_handler(store, api_key):
                 return False
             return True
 
+        def read_body(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError("Invalid body size")
+            return json.loads(self.rfile.read(length))
+
+        def channel_route(self):
+            match = re.fullmatch(r"/v1/channels/(telegram|ntfy)(/test)?", self.path)
+            return match.groups() if match and store.channel_settings is not None else None
+
         def do_GET(self):
             if self.path == "/healthz":
                 self.reply(200, dict(ok=True))
             elif self.authorized():
                 if self.path == "/v1/status":
                     self.reply(200, store.status())
+                elif self.path == "/v1/channels" and store.channel_settings is not None:
+                    self.reply(200, store.channel_settings.status())
                 else:
                     self.reply(404, dict(error="Not found"))
 
         def do_PUT(self):
             if not self.authorized():
+                return
+            route = self.channel_route()
+            if route and route[1] is None:
+                try:
+                    self.reply(200, store.channel_settings.save(route[0], self.read_body()))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    self.reply(400, dict(error="Invalid channel configuration"))
                 return
             if self.path != "/v1/schedule":
                 self.reply(404, dict(error="Not found"))
@@ -464,6 +569,15 @@ def make_handler(store, api_key):
 
         def do_POST(self):
             if not self.authorized():
+                return
+            route = self.channel_route()
+            if route and route[1] == "/test":
+                try:
+                    self.reply(200, store.channel_settings.test(route[0], self.read_body()))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    self.reply(400, dict(error="Invalid channel configuration"))
+                except DeliveryError as exc:
+                    self.reply(502, dict(error=str(exc)))
                 return
             if self.path != "/v1/test":
                 self.reply(404, dict(error="Not found"))
@@ -508,6 +622,12 @@ def main():
     path = os.environ.get("AWAIT_DB", "/data/await.sqlite3")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     store = ScheduleStore(path, senders)
+    defaults = {}
+    if "telegram" in senders:
+        defaults["telegram"] = dict(botToken=os.environ["TELEGRAM_BOT_TOKEN"], chatId=os.environ["TELEGRAM_CHAT_ID"])
+    if "ntfy" in senders:
+        defaults["ntfy"] = dict(url=os.environ["NTFY_URL"], topic=os.environ["NTFY_TOPIC"], token=os.environ.get("NTFY_TOKEN", ""))
+    store.channel_settings = ChannelSettings(store, key, defaults=defaults)
     stop = threading.Event()
 
     def scheduler():

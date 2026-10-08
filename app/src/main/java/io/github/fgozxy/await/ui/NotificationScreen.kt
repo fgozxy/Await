@@ -21,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -63,7 +62,7 @@ fun rememberSyncStatus(): String {
         }
         if (NotificationChannels.remote(channels).isNotEmpty() || SyncSettings.load(context).isValid) {
             messages += when {
-                !SyncSettings.load(context).isValid -> "请配置通知服务器"
+                !CloudDeployment.isReady(context) -> "请先完成云端部署配置并验证连接"
                 !sp.getString("last_error", "").isNullOrEmpty() -> sp.getString("last_error", "").orEmpty()
                 sp.getLong("revision", 0) > sp.getLong("synced_revision", 0) -> "云端设置等待同步；服务器仍按上次设置提醒"
                 NotificationChannels.remote(channels).isEmpty() -> "云端通知已关闭"
@@ -79,10 +78,9 @@ fun rememberSyncStatus(): String {
 fun NotificationScreen(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val saved = remember { SyncSettings.load(context) }
     var channels by remember { mutableStateOf(NotificationChannels.load(context)) }
-    var url by remember { mutableStateOf(saved.url) }
-    var apiKey by remember { mutableStateOf(saved.apiKey) }
+    var showCloud by remember { mutableStateOf(false) }
+    var configuringChannel by remember { mutableStateOf<NotificationChannel?>(null) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
     val syncStatus = rememberSyncStatus()
@@ -90,8 +88,6 @@ fun NotificationScreen(onDismiss: () -> Unit) {
         LocalNotifications.reschedule(context)
         result = if (it) "软件通知权限已开启" else "软件通知权限未开启，可在系统设置中允许"
     }
-
-    fun config() = SyncSettings.Config(url.trim().trimEnd('/'), apiKey.trim())
 
     fun requestLocalPermission() {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context,
@@ -107,13 +103,12 @@ fun NotificationScreen(onDismiss: () -> Unit) {
     fun save() {
         if (channels.isEmpty()) { result = "请至少选择一种通知渠道"; return }
         val remote = NotificationChannels.remote(channels)
-        val draft = config()
-        if (remote.isNotEmpty() && !draft.isValid) {
-            result = "Telegram 和 ntfy 需要 HTTPS 服务器地址及至少 32 位的访问密钥"
+        if (remote.isNotEmpty() && !CloudDeployment.isReady(context)) {
+            result = "请先完成云端部署配置并验证连接"
             return
         }
-        if ((url.isNotBlank() || apiKey.isNotBlank()) && !draft.isValid) {
-            result = "服务器配置不完整；请填写有效地址与密钥，或仅使用软件通知"
+        if (!CloudDeployment.available(context).containsAll(remote)) {
+            result = "请先配置所选消息渠道，再开启通知"
             return
         }
         busy = true
@@ -121,8 +116,6 @@ fun NotificationScreen(onDismiss: () -> Unit) {
             val successful = withContext(Dispatchers.IO) {
                 try {
                     synchronized(SyncCoordinator.lock) {
-                        // Retain an existing server so disabling remote channels also cancels its queue.
-                        if (draft.isValid) SyncSettings.save(context, draft)
                         NotificationChannels.save(context, channels)
                         SyncSettings.prefs(context).edit().putString("last_error", "").apply()
                         SyncCoordinator.changed(context)
@@ -141,8 +134,8 @@ fun NotificationScreen(onDismiss: () -> Unit) {
     }
 
     fun remoteTask(test: Boolean) {
-        val draft = config()
-        if (!draft.isValid) { result = "请填写有效的 HTTPS 服务器地址和访问密钥"; return }
+        val draft = SyncSettings.load(context)
+        if (!CloudDeployment.isReady(context)) { result = "请先验证云端部署配置"; return }
         val remote = NotificationChannels.remote(channels)
         if (test && remote.isEmpty()) { result = "请先选择 Telegram 或 ntfy"; return }
         busy = true
@@ -150,6 +143,7 @@ fun NotificationScreen(onDismiss: () -> Unit) {
             try {
                 val taskResult = withContext(Dispatchers.IO) {
                     val status = ServerClient.checkChannels(draft, remote)
+                    CloudDeployment.record(context, draft, CloudDeployment.parse(status, SyncSettings.clientId(context)))
                     if (test) {
                         val response = ServerClient.request(draft, "POST", "/v1/test",
                             Gson().toJson(mapOf("notificationChannels" to remote)))
@@ -183,14 +177,12 @@ fun NotificationScreen(onDismiss: () -> Unit) {
             Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("可选择一个或多个通知渠道，所有日程使用这里的设置。提醒日期和时刻仍可在各日程中单独设置。")
-                NotificationChannel.entries.forEach { channel ->
-                    Row(Modifier.fillMaxWidth().toggleable(value = channel in channels, enabled = !busy,
-                        role = Role.Checkbox, onValueChange = { enabled ->
-                            channels = if (enabled) channels + channel else channels - channel
-                        }), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = channel in channels, onCheckedChange = null, enabled = !busy)
-                        Text(channel.label)
-                    }
+                Row(Modifier.fillMaxWidth().toggleable(value = NotificationChannel.LOCAL in channels, enabled = !busy,
+                    role = Role.Checkbox, onValueChange = { enabled ->
+                        channels = if (enabled) channels + NotificationChannel.LOCAL else channels - NotificationChannel.LOCAL
+                    }), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = NotificationChannel.LOCAL in channels, onCheckedChange = null, enabled = !busy)
+                    Text("软件通知")
                 }
                 if (NotificationChannel.LOCAL in channels) {
                     Text("软件通知是常规消息通知，可划走或点击查看，不持续响铃。在本机发送，无需服务器或网络。手机关机时无法通知，重新开机后补发最近 24 小时内已安排的提醒。")
@@ -208,16 +200,43 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                     }, enabled = !busy) { Text("测试软件通知") }
                 }
                 HorizontalDivider()
-                Text("云端通知服务器", style = MaterialTheme.typography.titleMedium)
-                Text("Telegram 和 ntfy 由服务器定时发送，手机关机后也能推送。离线修改需同步成功后才会在云端生效。")
-                OutlinedTextField(url, { url = it }, label = { Text("服务器地址（HTTPS）") },
-                    singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(apiKey, { apiKey = it }, label = { Text("服务器访问密钥") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), enabled = !busy, modifier = Modifier.fillMaxWidth())
-                Text("Telegram Bot Token / Chat ID、ntfy 地址 / Topic / Token 在服务器配置；手机访问密钥加密保存。")
+                Text("第一步：云端部署配置", style = MaterialTheme.typography.titleMedium)
+                val deployed = CloudDeployment.isReady(context)
+                Text(if (deployed) "云端连接已验证。可继续配置消息渠道。" else
+                    "先部署 Await 服务并验证连接，再配置 Telegram 和 ntfy。软件通知可独立使用。")
+                Button(onClick = { showCloud = true }, enabled = !busy) {
+                    Text(if (deployed) "查看或修改云端部署" else "配置云端部署")
+                }
+                HorizontalDivider()
+                Text("第二步：消息渠道", style = MaterialTheme.typography.titleMedium)
+                listOf(NotificationChannel.TELEGRAM, NotificationChannel.NTFY).forEach { channel ->
+                    val ready = deployed && channel.wireName in CloudDeployment.available(context)
+                    val selected = channel in channels
+                    val canToggle = !busy && (ready || selected)
+                    Row(Modifier.fillMaxWidth().toggleable(value = selected, enabled = canToggle,
+                        role = Role.Checkbox, onValueChange = { enabled ->
+                            channels = if (enabled) channels + channel else channels - channel
+                        }), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = selected, onCheckedChange = null, enabled = canToggle)
+                        Text(channel.label)
+                    }
+                    Text(when {
+                        !deployed -> "完成云端部署配置后可设置此渠道"
+                        ready -> "渠道已配置，可以勾选开启"
+                        else -> "渠道尚未配置，请先填写参数"
+                    }, style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { configuringChannel = channel },
+                        enabled = !busy && CloudDeployment.canConfigureChannels(context)) {
+                        Text("配置 ${channel.label}")
+                    }
+                }
+                if (deployed && !CloudDeployment.canConfigureChannels(context)) {
+                    Text("当前服务只支持服务器端配置渠道；升级 Await 云端服务后可直接在手机填写参数。")
+                }
+                Text("第三步：勾选渠道并保存", style = MaterialTheme.typography.titleMedium)
                 Button(onClick = ::save, enabled = !busy) { Text("保存通知设置") }
-                OutlinedButton(onClick = { remoteTask(true) }, enabled = !busy) { Text("测试所选云端渠道") }
-                OutlinedButton(onClick = { remoteTask(false) }, enabled = !busy) { Text("查看服务器状态") }
+                OutlinedButton(onClick = { remoteTask(true) }, enabled = !busy && deployed) { Text("测试所选云端渠道") }
+                OutlinedButton(onClick = { remoteTask(false) }, enabled = !busy && deployed) { Text("查看服务器状态") }
                 Text(syncStatus, color = MaterialTheme.colorScheme.primary)
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (result.isNotBlank()) Text(result)
@@ -227,4 +246,9 @@ fun NotificationScreen(onDismiss: () -> Unit) {
             }
         }
     }
+    if (showCloud) CloudDeploymentScreen(onDismiss = { showCloud = false })
+    configuringChannel?.let { channel ->
+        CloudChannelScreen(channel, onDismiss = { configuringChannel = null })
+    }
+
 }

@@ -46,7 +46,9 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : Worker(contex
         val sp = SyncSettings.prefs(applicationContext)
         return try {
             val (revision, payload) = SyncCoordinator.snapshot(applicationContext)
-            ServerClient.checkChannels(config, NotificationChannels.remote(NotificationChannels.load(applicationContext)))
+            val status = ServerClient.checkChannels(config, NotificationChannels.remote(NotificationChannels.load(applicationContext)))
+            CloudDeployment.record(applicationContext, config,
+                CloudDeployment.parse(status, SyncSettings.clientId(applicationContext)))
             ServerClient.request(config, "PUT", "/v1/schedule", payload)
             synchronized(SyncCoordinator.lock) {
                 if (SyncSettings.load(applicationContext) == config) {

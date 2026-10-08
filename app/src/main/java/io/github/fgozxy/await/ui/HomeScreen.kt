@@ -67,6 +67,7 @@ fun HomeScreen(
     var showBackup by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
     var showNotifications by remember { mutableStateOf(false) }
+    var showCloudDeployment by remember { mutableStateOf(false) }
     val syncStatus = rememberSyncStatus()
     var showUnifiedNotify by remember { mutableStateOf(false) }
 
@@ -146,6 +147,11 @@ fun HomeScreen(
                         Icon(Icons.Default.MoreVert, "更多")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("云端部署配置") },
+                            onClick = { menuOpen = false; showCloudDeployment = true },
+                            leadingIcon = { Icon(Icons.Default.CloudSync, null) }
+                        )
                         DropdownMenuItem(
                             text = { Text("通知设置") },
                             onClick = { menuOpen = false; showNotifications = true },
@@ -621,6 +627,7 @@ fun HomeScreen(
         ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
     }
 
+    if (showCloudDeployment) CloudDeploymentScreen(onDismiss = { showCloudDeployment = false })
     if (showNotifications) NotificationScreen(onDismiss = { showNotifications = false })
 
     // ── 统一通知 ──
