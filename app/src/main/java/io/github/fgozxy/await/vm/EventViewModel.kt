@@ -5,9 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.data.EventStore
 import io.github.fgozxy.await.data.GroupStore
-import io.github.fgozxy.await.data.MergeGroup
-import io.github.fgozxy.await.data.MergeStore
-import io.github.fgozxy.await.sync.SyncCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -27,10 +24,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _groups = MutableStateFlow(loadGroups())
     val groups: StateFlow<List<String>> = _groups
-
-    /** 合并通知组：同一天的若干日程共用一次提醒 */
-    private val _mergeGroups = MutableStateFlow(loadMergeGroups())
-    val mergeGroups: StateFlow<List<MergeGroup>> = _mergeGroups
 
     /**
      * 新建一个空分组。
@@ -72,27 +65,6 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
             refresh()
         }
         return count
-    }
-
-    /**
-     * 把若干条日程合并成一个通知组。少于 2 条不成组。
-     *
-     * @return 是否真的建了组
-     */
-    fun mergeNotifications(eventIds: Set<Long>): Boolean {
-        val created = MergeStore.merge(getApplication(), eventIds) != null
-        if (created) {
-            _mergeGroups.value = loadMergeGroups()
-            SyncCoordinator.changed(getApplication())
-        }
-        return created
-    }
-
-    /** 解散一个合并通知组 */
-    fun unmergeNotifications(groupId: Long) {
-        MergeStore.unmerge(getApplication(), groupId)
-        SyncCoordinator.changed(getApplication())
-        _mergeGroups.value = loadMergeGroups()
     }
 
     /** 新增或更新（id 相同视为更新） */
@@ -167,16 +139,8 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun refresh() {
         val list = EventStore.load(getApplication())
-        // 日程被删掉后，合并组里会留下悬空的 id；顺手清一次，不足 2 条的组自动解散
-        MergeStore.prune(getApplication(), list)
         _events.value = list.sortedWithDefault()
         _groups.value = loadGroups()
-        _mergeGroups.value = loadMergeGroups()
-    }
-
-    private fun loadMergeGroups(): List<MergeGroup> {
-        val context = getApplication<Application>()
-        return MergeStore.prune(context, EventStore.load(context))
     }
 
     /** 显式建过的分组 + 日程里出现过的分组，去重排序 */

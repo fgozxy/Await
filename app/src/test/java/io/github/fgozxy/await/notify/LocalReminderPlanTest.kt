@@ -1,7 +1,6 @@
 package io.github.fgozxy.await.notify
 
 import io.github.fgozxy.await.data.Event
-import io.github.fgozxy.await.data.MergeGroup
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.LocalDate
@@ -66,14 +65,13 @@ class LocalReminderPlanTest {
     }
 
     @Test
-    fun onlySelectedMembersAtTheSameInstantShareASoftwareNotification() {
+    fun eventsAtTheSameInstantHaveSeparateStableNotificationTags() {
         val entries = listOf(PlannedReminder(1, 1000, "a"), PlannedReminder(2, 1000, "b"),
             PlannedReminder(3, 1000, "c"), PlannedReminder(2, 2000, "d"))
-        val groups = listOf(MergeGroup(1, listOf(1, 2)))
-        val batches = LocalReminderPlan.batches(entries, groups)
-        assertEquals(3, batches.size)
-        assertEquals(listOf(1L, 2L), batches.getValue(1000L to listOf(1L, 2L)).map { it.eventId })
-        assertEquals(4, LocalReminderPlan.batches(entries, emptyList()).size)
+        assertEquals(4, entries.map(LocalReminderPlan::notificationTag).toSet().size)
+        assertEquals("reminder:1000:1", LocalReminderPlan.notificationTag(entries.first()))
+        assertEquals(LocalReminderPlan.notificationTag(entries[1]),
+            LocalReminderPlan.notificationTag(entries[1].copy(fingerprint = "updated")))
     }
 
     @Test

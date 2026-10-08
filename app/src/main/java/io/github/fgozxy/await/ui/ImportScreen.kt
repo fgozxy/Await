@@ -245,8 +245,7 @@ internal fun ImportConfirmDialog(
                     context,
                     bundle.events,
                     mode,
-                    bundle.groups,
-                    bundle.mergeGroups
+                    bundle.groups
                 )
             }
             viewModel.reload()

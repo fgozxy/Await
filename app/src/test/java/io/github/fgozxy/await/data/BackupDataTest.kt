@@ -47,7 +47,6 @@ class BackupDataTest {
 
         assertEquals(listOf("空分组", "工作"), bundle.groups)
         assertEquals(2, bundle.events.size)
-        assertEquals(listOf(MergeGroup(10, listOf(1, 2))), bundle.mergeGroups)
     }
 
     @Test
@@ -57,11 +56,10 @@ class BackupDataTest {
         ).getOrThrow()
 
         assertNull(bundle.groups)
-        assertNull(bundle.mergeGroups)
     }
 
     @Test
-    fun legacyAlarmModeIsIgnoredWhenRestoringTelegramMergeGroup() {
+    fun legacyAlarmAndMergeSettingsAreIgnoredWhenRestoringEvents() {
         val bundle = BackupData.parseBundle(
             """{
               "events":[
@@ -72,7 +70,17 @@ class BackupDataTest {
             }""".trimIndent()
         ).getOrThrow()
 
-        assertEquals(listOf(MergeGroup(10, listOf(1, 2))), bundle.mergeGroups)
+        assertEquals(listOf("普通通知", "闹钟提醒"), bundle.events.map { it.title })
+        assertEquals(2, bundle.events.size)
+    }
+
+    @Test
+    fun obsoleteMergeMetadataCannotPreventRestoringCalendar() {
+        for (obsolete in listOf("null", "{\"broken\":true}", "[{\"eventIds\":[999]}]")) {
+            val bundle = BackupData.parseBundle("""{"app":"Await","formatVersion":1,"events":[{"title":"保留日程","date":"2026-10-08"}],"groups":["空分组"],"mergeGroups":$obsolete}""").getOrThrow()
+            assertEquals("保留日程", bundle.events.single().title)
+            assertEquals(listOf("空分组"), bundle.groups)
+        }
     }
 
     @Test
@@ -95,12 +103,12 @@ class BackupDataTest {
                 remindDaysBefore = listOf(0, 1, 7), remindHour = 8, remindMinute = 30)
         )
         val payload = BackupData.Payload(events = events, eventCount = events.size,
-            groups = listOf("朋友", "空分组"), mergeGroups = listOf(MergeGroup(10, listOf(1, 2))))
+            groups = listOf("朋友", "空分组"))
         val json = BackupData.encodePayload(payload)
         val restored = BackupData.parseBundle(json).getOrThrow()
         assertEquals(events, restored.events)
         assertEquals(payload.groups, restored.groups)
-        assertEquals(payload.mergeGroups, restored.mergeGroups)
+        assertEquals(0, com.google.gson.JsonParser.parseString(json).asJsonObject["mergeGroups"].asJsonArray.size())
         val fields = com.google.gson.JsonParser.parseString(json).asJsonObject.keySet()
         assertEquals(setOf("app", "formatVersion", "exportedAt", "appVersion", "eventCount", "events", "groups", "mergeGroups"), fields)
     }

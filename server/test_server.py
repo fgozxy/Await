@@ -105,18 +105,20 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.store.update(other)
 
-    def test_merged_jobs_send_once_and_unmerging_does_not_duplicate(self):
+    def test_legacy_group_changes_at_same_revision_do_not_change_individual_jobs(self):
         events = [event(), event(2, title="订阅")]
         self.store.update(snapshot(events, groups=[dict(eventIds=[1, 2])]))
-        self.store.update(snapshot(events, revision=2))
+        self.store.update(snapshot(events))
         self.due()
         self.assertEqual(2, len(self.sender.messages))
 
-    def test_merged_messages_contain_every_member(self):
+    def test_same_day_events_send_separate_messages_even_with_legacy_groups(self):
         self.store.update(snapshot([event(), event(2, title="订阅")], groups=[dict(eventIds=[1, 2])]))
         self.due()
-        self.assertEqual(1, len(self.sender.messages))
-        self.assertIn("订阅", self.sender.messages[0])
+        self.assertEqual(2, len(self.sender.messages))
+        self.assertEqual(1, sum("房租" in text for text in self.sender.messages))
+        self.assertEqual(1, sum("订阅" in text for text in self.sender.messages))
+        self.assertTrue(all(not ("房租" in text and "订阅" in text) for text in self.sender.messages))
 
     def test_disabled_reminders_never_send(self):
         self.store.update(snapshot([event(remindDaysBefore=[])]))

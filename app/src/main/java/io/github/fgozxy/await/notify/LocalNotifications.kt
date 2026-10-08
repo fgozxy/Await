@@ -18,7 +18,6 @@ import com.google.gson.JsonParser
 import io.github.fgozxy.await.MainActivity
 import io.github.fgozxy.await.R
 import io.github.fgozxy.await.data.EventStore
-import io.github.fgozxy.await.data.MergeStore
 import io.github.fgozxy.await.sync.SyncCoordinator
 import java.time.Instant
 import java.time.ZoneId
@@ -112,20 +111,15 @@ object LocalNotifications {
         val plan = readPlan(context)
         val due = plan.filter { entry -> entry.due in (now - 86_400_000L)..now &&
             events[entry.eventId]?.let { LocalReminderPlan.fingerprint(it, zone) == entry.fingerprint } == true }
-        val groups = MergeStore.prune(context, events.values.toList())
-        val buckets = LocalReminderPlan.batches(due, groups)
         val consumed = mutableSetOf<PlannedReminder>()
-        buckets.forEach { (key, entries) ->
-            val date = Instant.ofEpochMilli(key.first).atZone(zone).toLocalDate()
-            val text = entries.joinToString("\n\n") { entry ->
-                val event = events.getValue(entry.eventId)
-                val target = event.occurrenceOnOrAfter(date) ?: event.date
-                val days = java.time.temporal.ChronoUnit.DAYS.between(date, target)
-                event.title + "\n$target · " + (if (days == 0L) "就是今天！" else "还有 $days 天") +
-                    event.note.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
-            }
-            val tag = "reminder:${key.first}:${entries.map { it.eventId }.sorted().joinToString(",")}"
-            if (show(context, text, tag)) consumed.addAll(entries)
+        due.forEach { entry ->
+            val date = Instant.ofEpochMilli(entry.due).atZone(zone).toLocalDate()
+            val event = events.getValue(entry.eventId)
+            val target = event.occurrenceOnOrAfter(date) ?: event.date
+            val days = java.time.temporal.ChronoUnit.DAYS.between(date, target)
+            val text = event.title + "\n$target · " + (if (days == 0L) "就是今天！" else "还有 $days 天") +
+                event.note.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
+            if (show(context, text, LocalReminderPlan.notificationTag(entry))) consumed.add(entry)
         }
         // Denied notifications remain available for catch-up after permission is granted.
         writePlan(context, plan.filterNot { it in consumed })

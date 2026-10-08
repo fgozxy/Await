@@ -69,7 +69,6 @@ fun HomeScreen(
     var showNotifications by remember { mutableStateOf(false) }
     var showCloudDeployment by remember { mutableStateOf(false) }
     val syncStatus = rememberSyncStatus()
-    var showUnifiedNotify by remember { mutableStateOf(false) }
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
@@ -171,11 +170,6 @@ fun HomeScreen(
                             text = { Text("管理分组") },
                             onClick = { menuOpen = false; showManageGroups = true },
                             leadingIcon = { Icon(Icons.Default.Label, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("合并通知") },
-                            onClick = { menuOpen = false; showUnifiedNotify = true },
-                            leadingIcon = { Icon(Icons.Default.NotificationsPaused, null) }
                         )
                         DropdownMenuItem(
                             text = { Text("分配日程到分组") },
@@ -630,10 +624,7 @@ fun HomeScreen(
     if (showCloudDeployment) CloudDeploymentScreen(onDismiss = { showCloudDeployment = false })
     if (showNotifications) NotificationScreen(onDismiss = { showNotifications = false })
 
-    // ── 统一通知 ──
-    if (showUnifiedNotify) {
-        UnifiedNotifyScreen(viewModel = viewModel, onDismiss = { showUnifiedNotify = false })
-    }
+
 }
 
 /** 分组筛选行：全部 / 未分组 / 各分组 */

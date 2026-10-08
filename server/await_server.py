@@ -104,21 +104,10 @@ def validate_snapshot(raw):
             remindDaysBefore=offsets, remindHour=integer(event.get("remindHour"), 0, 23),
             remindMinute=integer(event.get("remindMinute"), 0, 59), cycle=cycle,
             repeatN=integer(event.get("repeatN", 1), 1, 3650)))
-    groups, claimed = [], set()
-    raw_groups = raw.get("mergeGroups", [])
-    if not isinstance(raw_groups, list) or len(raw_groups) > 5000:
-        raise ValueError("Invalid merge groups")
-    for group in raw_groups:
-        if not isinstance(group, dict) or not isinstance(group.get("eventIds"), list):
-            raise ValueError("Invalid merge group")
-        members = sorted({integer(n, -(2**63), 2**63 - 1) for n in group["eventIds"]})
-        if len(members) < 2 or not set(members) <= ids or claimed.intersection(members):
-            raise ValueError("Invalid merge membership")
-        claimed.update(members)
-        groups.append(members)
+    # Legacy mergeGroups is intentionally ignored; each event has its own delivery.
     channels = validate_channels(raw.get("notificationChannels", ["telegram"]))
     return dict(clientId=client, revision=revision, timezone=zone, notificationChannels=channels,
-                events=sorted(normalized, key=lambda e: e["id"]), mergeGroups=sorted(groups))
+                events=sorted(normalized, key=lambda e: e["id"]), mergeGroups=[])
 
 
 def occurrence(event, index):
@@ -365,6 +354,18 @@ class ChannelSettings:
         return dict(ok=True)
 
 
+def reminder_id(due, members, channel):
+    # Preserve existing individual Telegram and ntfy delivery identities.
+    return digest([due, members]) if channel == "telegram" else digest([due, members, channel])
+
+
+def reminder_text(event, target, due, zone):
+    days = (target - datetime.fromtimestamp(due, zone).date()).days
+    return clip_message("⏳ Await 日程提醒\n\n" + event["title"] + "\n" + target.isoformat() + " · " +
+                        ("就是今天！" if days == 0 else f"还有 {days} 天") +
+                        ("\n" + event["note"] if event["note"] else ""))
+
+
 class ScheduleStore:
     def __init__(self, path, sender, clock=time.time):
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -387,6 +388,7 @@ class ScheduleStore:
         self.channel_settings = None
         self.backups = None
         self._last_generated = None
+        self._migrate_individual_jobs()
 
     def snapshot(self):
         row = self.db.execute("SELECT body FROM snapshot WHERE id=1").fetchone()
@@ -394,7 +396,42 @@ class ScheduleStore:
             return None
         body = json.loads(row["body"])
         body.setdefault("notificationChannels", ["telegram"])
+        body["mergeGroups"] = []
         return body
+
+    def _migrate_individual_jobs(self):
+        """Atomically split legacy queues, projecting successful delivery onto each member."""
+        with self.lock, self.db:
+            body = self.snapshot()
+            if body:
+                # Keep the original revision and sync timestamp for idempotency and catch-up.
+                self.db.execute("UPDATE snapshot SET body=? WHERE id=1", (canonical(body),))
+            zone = parse_zone(body["timezone"]) if body else UTC
+            by_member = {digest([event, body["timezone"]]): event for event in body["events"]} if body else {}
+            for job in self.db.execute("SELECT * FROM jobs WHERE instr(members, ',')>0").fetchall():
+                members = json.loads(job["members"])
+                if len(members) <= 1:
+                    continue
+                point = datetime.fromtimestamp(job["due"], UTC)
+                for member in members:
+                    text = job["body"]
+                    if job["state"] != "sent":
+                        event = by_member.get(member)
+                        if not event or job["channel"] not in body["notificationChannels"]:
+                            continue  # Cancel removed/edited events and disabled channels.
+                        target = dict(triggers(event, zone, point, point)).get(job["due"])
+                        if target is None:
+                            continue
+                        text = reminder_text(event, target, job["due"], zone)
+                    identity = reminder_id(job["due"], [member], job["channel"])
+                    self.db.execute("""INSERT INTO jobs
+                        (id,due,members,body,state,attempts,retry_at,error,sent_at,channel)
+                        VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                        state='sent',sent_at=excluded.sent_at,error=''
+                        WHERE excluded.state='sent' AND jobs.state!='sent'""",
+                        (identity, job["due"], canonical([member]), text, job["state"], job["attempts"],
+                         job["retry_at"], job["error"], job["sent_at"], job["channel"]))
+                self.db.execute("DELETE FROM jobs WHERE id=?", (job["id"],))
 
     def update(self, raw):
         body = validate_snapshot(raw)
@@ -426,29 +463,17 @@ class ScheduleStore:
         zone = parse_zone(snapshot["timezone"])
         start = datetime.fromtimestamp(now, UTC)
         end = datetime.fromtimestamp(end_at, UTC) if end_at is not None else start + timedelta(days=2)
-        group_by_id = {member: tuple(group) for group in snapshot["mergeGroups"] for member in group}
-        buckets = {}
-        for event in snapshot["events"]:
-            for due, target in triggers(event, zone, start, end):
-                # Different dates/rules inside an old group must never be merged.
-                signature = (target, tuple(event["remindDaysBefore"]), event["remindHour"],
-                             event["remindMinute"])
-                key = (due, group_by_id.get(event["id"], (event["id"],)), signature)
-                buckets.setdefault(key, []).append((event, target))
         valid_ids = set()
-        for (due, _, _), events in buckets.items():
-            members = sorted(digest([event, snapshot["timezone"]]) for event, _ in events)
-            text = "⏳ Await 日程提醒\n\n" + "\n\n".join(
-                event["title"] + "\n" + target.isoformat() + " · " +
-                ("就是今天！" if (target - datetime.fromtimestamp(due, zone).date()).days == 0
-                 else f"还有 {(target - datetime.fromtimestamp(due, zone).date()).days} 天") +
-                ("\n" + event["note"] if event["note"] else "") for event, target in events)
-            for channel in snapshot.get("notificationChannels", ["telegram"]):
-                job_id = digest([due, members]) if channel == "telegram" else digest([due, members, channel])
-                valid_ids.add(job_id)
-                if insert:
-                    self.db.execute("INSERT OR IGNORE INTO jobs (id,due,members,body,channel) VALUES (?,?,?,?,?)",
-                                    (job_id, due, canonical(members), clip_message(text), channel))
+        for event in snapshot["events"]:
+            members = [digest([event, snapshot["timezone"]])]
+            for due, target in triggers(event, zone, start, end):
+                text = reminder_text(event, target, due, zone)
+                for channel in snapshot.get("notificationChannels", ["telegram"]):
+                    identity = reminder_id(due, members, channel)
+                    valid_ids.add(identity)
+                    if insert:
+                        self.db.execute("INSERT OR IGNORE INTO jobs (id,due,members,body,channel) VALUES (?,?,?,?,?)",
+                                        (identity, due, canonical(members), text, channel))
         return valid_ids
 
     def tick(self):

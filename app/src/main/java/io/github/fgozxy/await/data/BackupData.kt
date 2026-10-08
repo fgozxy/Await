@@ -52,16 +52,17 @@ object BackupData {
         val eventCount: Int = 0,
         val events: List<Event> = emptyList(),
         /** v1.7.2 起备份显式创建的分组；旧备份没有该字段，解析时以 null 区分 */
-        val groups: List<String> = emptyList(),
-        /** v1.8.1 起备份统一通知组 */
-        val mergeGroups: List<MergeGroup> = emptyList()
-    )
+        val groups: List<String> = emptyList()
+    ) {
+        /** 保留旧云端备份协议字段，始终为空；不再导出或恢复旧通知合并设置。 */
+        @Suppress("unused")
+        private val mergeGroups = emptyList<Long>()
+    }
 
     /** null 表示旧备份或裸数组里没有对应元数据。 */
     data class ImportBundle(
         val events: List<Event>,
-        val groups: List<String>? = null,
-        val mergeGroups: List<MergeGroup>? = null
+        val groups: List<String>? = null
     )
 
     /**
@@ -116,8 +117,7 @@ object BackupData {
                 appVersion = version,
                 eventCount = events.size,
                 events = events,
-                groups = GroupStore.load(context),
-                mergeGroups = MergeStore.prune(context, events)
+                groups = GroupStore.load(context)
             )
         )
     }
@@ -165,17 +165,8 @@ object BackupData {
                 val raw: List<String?> = gson.fromJson(groupElement, groupType) ?: emptyList()
                 raw.filterNotNull().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             }
-        val mergeGroups = root.takeIf { it.isJsonObject }
-            ?.asJsonObject
-            ?.takeIf { it.has("mergeGroups") }
-            ?.get("mergeGroups")
-            ?.takeIf { it.isJsonArray }
-            ?.let { mergeElement ->
-                val mergeType = object : TypeToken<List<MergeGroup?>>() {}.type
-                val raw: List<MergeGroup?> = gson.fromJson(mergeElement, mergeType) ?: emptyList()
-                MergeStore.sanitizeGroups(raw.filterNotNull(), normalizedEvents)
-            }
-        ImportBundle(normalizedEvents, groups, mergeGroups)
+        // 旧备份的 mergeGroups 字段忽略，日程与普通分组正常导入。
+        ImportBundle(normalizedEvents, groups)
     }
 
     /**
@@ -251,8 +242,7 @@ object BackupData {
         context: Context,
         incoming: List<Event>,
         mode: Mode,
-        incomingGroups: List<String>? = null,
-        incomingMergeGroups: List<MergeGroup>? = null
+        incomingGroups: List<String>? = null
     ): ImportResult {
         val current = EventStore.load(context)
 
@@ -283,13 +273,6 @@ object BackupData {
                 else (GroupStore.load(context) + safeGroups).distinct()
             )
         }
-        val stored = EventStore.load(context)
-        MergeStore.applyImport(
-            context = context,
-            incoming = incomingMergeGroups,
-            replace = mode == Mode.REPLACE,
-            events = stored
-        )
         SyncCoordinator.changed(context)
         return ImportResult(added, updated, result.size)
     }

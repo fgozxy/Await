@@ -158,7 +158,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
                     )
                 }
 
-                SectionCard("云端备份", "复用 Await 云端连接，备份完整日程、空分组和合并通知组") {
+                SectionCard("云端备份", "复用 Await 云端连接，备份完整日程和空分组") {
                     Text(cloudStatus, style = MaterialTheme.typography.bodySmall)
                     val ready = CloudDeployment.backupsEnabled(context)
                     val writable = CloudDeployment.canWriteBackup(context)
