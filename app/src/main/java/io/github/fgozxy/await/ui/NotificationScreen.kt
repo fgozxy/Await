@@ -68,7 +68,8 @@ fun rememberNotificationHealth(): NotificationHealth {
             availableRemoteChannels = CloudDeployment.available(context),
             lastError = sp.getString("last_error", "").orEmpty(),
             revision = sp.getLong("revision", 0),
-            syncedRevision = sp.getLong("synced_revision", 0)
+            syncedRevision = sp.getLong("synced_revision", 0),
+            retryPending = sp.getBoolean("retry_pending", false)
         )
     }
 }
@@ -245,6 +246,10 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                 OutlinedButton(onClick = { remoteTask(true) }, enabled = !busy && deployed) { Text("测试所选云端渠道") }
                 OutlinedButton(onClick = { remoteTask(false) }, enabled = !busy && deployed) { Text("查看服务器状态") }
                 Text(syncStatus, color = MaterialTheme.colorScheme.primary)
+                if (SyncSettings.load(context).isValid) {
+                    Text("云端每 15 分钟自动同步；修改日程或设置后及时上传。后台省电限制可能延迟同步。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (result.isNotBlank()) Text(result)
                 Text("关闭云端渠道后需完成一次同步，服务器才会取消待发提醒。同一服务器绑定一台手机；更换服务器后需停用旧服务器。",

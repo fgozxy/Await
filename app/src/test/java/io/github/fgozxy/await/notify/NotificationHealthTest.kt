@@ -14,9 +14,10 @@ class NotificationHealthTest {
         available: Set<String> = setOf("telegram", "ntfy"),
         error: String = "",
         revision: Long = 7,
-        syncedRevision: Long = 7
+        syncedRevision: Long = 7,
+        retryPending: Boolean = false
     ) = NotificationHealth.evaluate(channels, localAllowed, exactAllowed, cloudConfigured,
-        deploymentReady, canSync, available, error, revision, syncedRevision)
+        deploymentReady, canSync, available, error, revision, syncedRevision, retryPending)
 
     @Test
     fun everyHealthySingleOrMultipleChannelSelectionHidesHomeWarning() {
@@ -71,11 +72,49 @@ class NotificationHealthTest {
     }
 
     @Test
-    fun remoteFailuresAndPendingSyncStillNeedAttentionWhenNoChannelWorks() {
+    fun remoteConfigurationFailuresStillNeedAttentionWhenNoChannelWorks() {
         assertEquals("同步失败", status(error = "同步失败").homeWarning)
-        assertTrue(status(revision = 8).homeWarning!!.contains("等待同步"))
         assertTrue(status(deploymentReady = false).homeWarning!!.contains("验证连接"))
         assertTrue(status(canSync = false).homeWarning!!.contains("迁移手机绑定"))
+    }
+
+    @Test
+    fun pendingUpdatesAreInformationalForEverySelectedRemoteChannel() {
+        for (channel in listOf(NotificationChannel.TELEGRAM, NotificationChannel.NTFY)) {
+            val health = status(channels = setOf(channel), revision = 8)
+            assertNull(health.homeWarning)
+            assertTrue(health.details.contains("等待同步"))
+            assertTrue(health.details.contains("上次同步设置"))
+        }
+    }
+
+    @Test
+    fun firstUploadIsInformationalWithoutClaimingTheServerHasTheSchedule() {
+        val health = status(revision = 1, syncedRevision = 0)
+        assertNull(health.homeWarning)
+        assertTrue(health.details.contains("等待首次同步"))
+        assertFalse(health.details.contains("上次"))
+    }
+
+    @Test
+    fun pendingUploadMustNotHideAnUnconfiguredSelectedChannel() {
+        val health = status(revision = 8, available = setOf("telegram"))
+        assertEquals("请先配置所选消息渠道，再开启通知", health.homeWarning)
+    }
+
+    @Test
+    fun retryableConnectionErrorsStayInSettingsWhileAuthenticationErrorsNeedAttention() {
+        val network = status(error = "无法连接服务器", retryPending = true)
+        assertNull(network.homeWarning)
+        assertTrue(network.details.contains("无法连接服务器"))
+        assertTrue(network.details.contains("自动重试"))
+        val firstUpload = status(error = "无法连接服务器", retryPending = true, syncedRevision = 0)
+        assertNull(firstUpload.homeWarning)
+        assertTrue(firstUpload.details.contains("等待首次上传"))
+        assertFalse(firstUpload.details.contains("上次"))
+        assertEquals("服务器访问密钥不正确", status(error = "服务器访问密钥不正确").homeWarning)
+        assertNotNull(status(error = "无法连接服务器", retryPending = true, deploymentReady = false).homeWarning)
+        assertNotNull(status(error = "无法连接服务器", retryPending = true, available = emptySet()).homeWarning)
     }
 
     @Test

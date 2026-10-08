@@ -12,7 +12,8 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action in listOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED,
                 Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_MY_PACKAGE_REPLACED,
                 android.app.AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED)) {
-            SyncCoordinator.changed(context)
+            if (intent.action == Intent.ACTION_TIMEZONE_CHANGED) SyncCoordinator.changed(context)
+            else SyncCoordinator.start(context)
             BackupScheduler.reschedule(context)
         }
     }

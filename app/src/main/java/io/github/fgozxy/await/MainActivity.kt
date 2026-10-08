@@ -17,6 +17,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        SyncCoordinator.changed(this)
+        SyncCoordinator.start(this)
     }
 }

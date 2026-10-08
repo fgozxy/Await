@@ -13,12 +13,13 @@ data class NotificationHealth(val details: String, val homeWarning: String?) {
             availableRemoteChannels: Set<String>,
             lastError: String,
             revision: Long,
-            syncedRevision: Long
+            syncedRevision: Long,
+            retryPending: Boolean = false
         ): NotificationHealth {
             val remote = channels.filter { it != NotificationChannel.LOCAL }
             val localReady = NotificationChannel.LOCAL in channels && localAllowed
-            val remoteReady = deploymentReady && canSync && lastError.isEmpty() &&
-                revision <= syncedRevision && remote.any { it.wireName in availableRemoteChannels }
+            val remoteReady = deploymentReady && canSync && (lastError.isEmpty() || retryPending) &&
+                remote.any { it.wireName in availableRemoteChannels }
             val messages = mutableListOf<String>()
             val warnings = mutableListOf<String>()
             if (NotificationChannel.LOCAL in channels) {
@@ -34,10 +35,12 @@ data class NotificationHealth(val details: String, val homeWarning: String?) {
                 val cloudStatus = when {
                     !deploymentReady -> "请先完成云端部署配置并验证连接"
                     !canSync -> "当前连接仅可恢复备份；通知同步需先迁移手机绑定"
-                    lastError.isNotEmpty() -> lastError
-                    revision > syncedRevision -> "云端设置等待同步；服务器仍按上次设置提醒"
+                    lastError.isNotEmpty() -> lastError + if (!retryPending) "" else if (syncedRevision == 0L)
+                        "；后台自动重试，等待首次上传" else "；后台自动重试，服务器仍按上次同步设置提醒"
                     remote.isEmpty() -> "云端通知已关闭"
                     remote.any { it.wireName !in availableRemoteChannels } -> "请先配置所选消息渠道，再开启通知"
+                    revision > syncedRevision -> if (syncedRevision == 0L) "云端日程等待首次同步，后台将自动上传"
+                        else "云端有更新等待同步；服务器仍按上次同步设置提醒"
                     else -> "云端通知已同步，手机关机后服务器仍会推送"
                 }
                 messages += cloudStatus
