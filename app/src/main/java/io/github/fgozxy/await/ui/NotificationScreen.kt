@@ -32,6 +32,7 @@ import com.google.gson.Gson
 import io.github.fgozxy.await.notify.LocalNotifications
 import io.github.fgozxy.await.notify.NotificationChannel
 import io.github.fgozxy.await.notify.NotificationChannels
+import io.github.fgozxy.await.notify.NotificationHealth
 import io.github.fgozxy.await.notify.ReminderSettings
 import io.github.fgozxy.await.sync.*
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +40,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun rememberSyncStatus(): String {
+fun rememberSyncStatus(): String = rememberNotificationHealth().details
+
+@Composable
+fun rememberNotificationHealth(): NotificationHealth {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val sp = remember { SyncSettings.prefs(context) }
@@ -51,27 +55,21 @@ fun rememberSyncStatus(): String {
         owner.lifecycle.addObserver(observer)
         onDispose { sp.unregisterOnSharedPreferenceChangeListener(listener); owner.lifecycle.removeObserver(observer) }
     }
-    return remember(revision) {
-        val channels = NotificationChannels.load(context)
-        val messages = mutableListOf<String>()
-        if (NotificationChannel.LOCAL in channels) {
-            messages += when {
-                !LocalNotifications.allowed(context) -> "软件通知已选择，请允许系统通知权限"
-                !LocalNotifications.exactAllowed(context) -> "软件通知已开启；未允许精确提醒，通知可能延迟"
-                else -> "软件通知已开启"
-            }
-        }
-        if (NotificationChannels.remote(channels).isNotEmpty() || SyncSettings.load(context).isValid) {
-            messages += when {
-                !CloudDeployment.isReady(context) -> "请先完成云端部署配置并验证连接"
-                !CloudDeployment.canSync(context) -> "当前连接仅可恢复备份；通知同步需先迁移手机绑定"
-                !sp.getString("last_error", "").isNullOrEmpty() -> sp.getString("last_error", "").orEmpty()
-                sp.getLong("revision", 0) > sp.getLong("synced_revision", 0) -> "云端设置等待同步；服务器仍按上次设置提醒"
-                NotificationChannels.remote(channels).isEmpty() -> "云端通知已关闭"
-                else -> "云端通知已同步，手机关机后服务器仍会推送"
-            }
-        }
-        messages.joinToString("\n")
+    val localAllowed = LocalNotifications.allowed(context)
+    val exactAllowed = LocalNotifications.exactAllowed(context)
+    return remember(revision, localAllowed, exactAllowed) {
+        NotificationHealth.evaluate(
+            channels = NotificationChannels.load(context),
+            localAllowed = localAllowed,
+            exactAllowed = exactAllowed,
+            cloudConfigured = SyncSettings.load(context).isValid,
+            deploymentReady = CloudDeployment.isReady(context),
+            canSync = CloudDeployment.canSync(context),
+            availableRemoteChannels = CloudDeployment.available(context),
+            lastError = sp.getString("last_error", "").orEmpty(),
+            revision = sp.getLong("revision", 0),
+            syncedRevision = sp.getLong("synced_revision", 0)
+        )
     }
 }
 

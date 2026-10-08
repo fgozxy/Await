@@ -68,7 +68,7 @@ fun HomeScreen(
     var showImport by remember { mutableStateOf(false) }
     var showNotifications by remember { mutableStateOf(false) }
     var showCloudDeployment by remember { mutableStateOf(false) }
-    val syncStatus = rememberSyncStatus()
+    val notificationHealth = rememberNotificationHealth()
 
     // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
     var showManageGroups by remember { mutableStateOf(false) }
@@ -194,7 +194,9 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            HealthBanner(syncStatus, "设置", { showNotifications = true })
+            notificationHealth.homeWarning?.let {
+                HealthBanner(it, "设置", { showNotifications = true })
+            }
             if (filtered.isEmpty() && (query.isNotBlank() || selectedGroup != null)) {
                 // 搜索/筛选无结果
                 Column(
