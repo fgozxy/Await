@@ -193,7 +193,7 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                     }
                 }
                 if (NotificationChannel.LOCAL in channels) {
-                    Text("软件通知在本机发送，无需服务器或网络。手机关机时无法通知，重新开机后补发最近 24 小时内已安排的提醒。")
+                    Text("软件通知是常规消息通知，可划走或点击查看，不持续响铃。在本机发送，无需服务器或网络。手机关机时无法通知，重新开机后补发最近 24 小时内已安排的提醒。")
                     OutlinedButton(onClick = ::requestLocalPermission, enabled = !busy) { Text("允许软件通知") }
                     if (Build.VERSION.SDK_INT >= 31) {
                         OutlinedButton(onClick = {

@@ -7,7 +7,7 @@ import android.content.Context
 import android.content.Intent
 import io.github.fgozxy.await.data.EventStore
 
-/** 升级后取消旧提醒；不创建本地通知或日程闹钟。 */
+/** 升级时清理旧版闹钟和持续响铃服务。 */
 object LegacyReminders {
     fun clear(context: Context) {
         val migration = context.getSharedPreferences("await_reminder_migrations", Context.MODE_PRIVATE)

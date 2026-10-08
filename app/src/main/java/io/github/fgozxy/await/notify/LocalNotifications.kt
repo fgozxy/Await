@@ -96,7 +96,7 @@ object LocalNotifications {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification).setContentTitle("Await 日程提醒")
             .setContentText(displayText).setStyle(NotificationCompat.BigTextStyle().bigText(displayText))
-            .setContentIntent(open).setAutoCancel(true).setOnlyAlertOnce(true).build()
+            .setContentIntent(open).setOngoing(false).setAutoCancel(true).setOnlyAlertOnce(true).build()
         return try { manager.notify(tag, 1, notification); true } catch (_: SecurityException) { false }
     }
 
