@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ 主题图标：沙漏剪影，颜色由系统决定 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.86" android:scaleY="0.86">
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M37.5,27H70.5A3.5,3.5 0 0 1 70.5,34H37.5A3.5,3.5 0 0 1 37.5,27Z M37.5,74H70.5A3.5,3.5 0 0 1 70.5,81H37.5A3.5,3.5 0 0 1 37.5,74Z" />
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineJoin="round"
+            android:pathData="M38,34L70,34C70,45 60,50 57,54C60,58 70,63 70,74L38,74C38,63 48,58 51,54C48,50 38,45 38,34Z" />
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M44,41L64,41C62,46 57,49 54,51.5C51,49 46,46 44,41Z M54,52a1,1 0 0 1 1,1v10a1,1 0 0 1 -2,0v-10a1,1 0 0 1 1,-1Z M42,72C44,65 50,62 54,62C58,62 64,65 66,72Z" />
+    </group>
+</vector>

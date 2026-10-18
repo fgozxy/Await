@@ -4,11 +4,10 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Update
@@ -18,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import io.github.fgozxy.await.R
 import androidx.compose.ui.unit.dp
 import io.github.fgozxy.await.ui.components.*
 import io.github.fgozxy.await.update.AutoUpdate
@@ -107,11 +108,14 @@ fun UpdateScreen() {
     PageScaffold(title = "软件更新") { padding ->
         PageColumn(padding) {
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier.size(80.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Outlined.HourglassTop, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                // 与桌面图标同一组图层，按 108dp 画布裁出中间 72dp 可见区
+                Box(Modifier.size(80.dp).clip(RoundedCornerShape(24.dp))) {
+                    listOf(R.drawable.ic_launcher_background, R.drawable.ic_launcher_foreground).forEach {
+                        Image(
+                            painterResource(it), null,
+                            Modifier.requiredSize(120.dp).align(Alignment.Center)
+                        )
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Text("Await", style = MaterialTheme.typography.titleLarge)
