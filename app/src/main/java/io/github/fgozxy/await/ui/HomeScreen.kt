@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.outlined.EventNote
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.ui.components.*
 import io.github.fgozxy.await.ui.theme.EventColors
@@ -418,11 +421,16 @@ private fun EventCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                val tags = listOfNotNull(event.group.takeIf { it.isNotBlank() }, event.cycleLabel())
-                if (tags.isNotEmpty() || event.note.isNotBlank()) {
+                val cycle = repeatText(event)
+                if (event.group.isNotBlank() || cycle != null || event.note.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        tags.forEach { Tag(it, accent) }
+                        if (event.group.isNotBlank()) {
+                            Chip(event.group, accent.copy(alpha = 0.14f), accent)
+                        }
+                        if (cycle != null) {
+                            Chip(cycle, colors.surfaceContainerHighest, colors.onSurfaceVariant, Icons.Rounded.Repeat)
+                        }
                         if (event.note.isNotBlank()) {
                             Text(
                                 event.note,
@@ -441,19 +449,39 @@ private fun EventCard(
     }
 }
 
+/** 循环说明：「每月」「每 2 周」「农历每年」；不重复返回 null。 */
+private fun repeatText(event: Event): String? {
+    val r = event.repeat
+    if (r.cycle == Cycle.NONE) return null
+    val lunar = if (event.isLunar && r.cycle in listOf(Cycle.MONTH, Cycle.YEAR)) "农历" else ""
+    return lunar + if (r.n <= 1) "每${r.cycle.unit}" else "每 ${r.n} ${r.cycle.unit}"
+}
+
+/** 卡片上的小标签：分组用日程色，循环用中性色并带循环图标。 */
 @Composable
-private fun Tag(text: String, accent: Color) {
-    Text(
-        text,
-        fontSize = 11.sp,
-        color = accent,
-        maxLines = 1,
-        modifier = Modifier
+private fun Chip(text: String, container: Color, content: Color, icon: ImageVector? = null) {
+    Row(
+        Modifier
             .padding(end = 6.dp)
+            .height(20.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(accent.copy(alpha = 0.12f))
-            .padding(horizontal = 6.dp, vertical = 1.dp)
-    )
+            .background(container)
+            .padding(start = if (icon != null) 4.dp else 7.dp, end = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) {
+            Icon(icon, null, Modifier.size(13.dp), tint = content)
+            Spacer(Modifier.width(3.dp))
+        }
+        Text(
+            text,
+            color = content,
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1
+        )
+    }
 }
 
 @Composable
