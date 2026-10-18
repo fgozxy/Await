@@ -3,7 +3,6 @@ package io.github.fgozxy.await.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -32,20 +31,16 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -198,24 +193,19 @@ fun HomeScreen(viewModel: EventViewModel) {
                     items(list.size, key = { list[it].id }) { i ->
                         val event = list[i]
                         val selected = event.id in selection
-                        val card: @Composable () -> Unit = {
-                            EventCard(
-                                event = event,
-                                selected = selected,
-                                selecting = selecting,
-                                onClick = {
-                                    if (selecting) {
-                                        haptics.tick()
-                                        selection = if (selected) selection - event.id else selection + event.id
-                                    } else Nav.go("edit", event.id.toString())
-                                },
-                                onLongClick = { selection = selection + event.id }
-                            )
-                        }
-                        Box(Modifier.animateItem()) {
-                            if (selecting) card()
-                            else SwipeToDeleteBox(onDelete = { deleteWithUndo(setOf(event.id)) }, content = card)
-                        }
+                        EventCard(
+                            event = event,
+                            selected = selected,
+                            selecting = selecting,
+                            modifier = Modifier.animateItem(),
+                            onClick = {
+                                if (selecting) {
+                                    haptics.tick()
+                                    selection = if (selected) selection - event.id else selection + event.id
+                                } else Nav.go("edit", event.id.toString())
+                            },
+                            onLongClick = { selection = selection + event.id }
+                        )
                     }
                 }
             }
@@ -336,60 +326,6 @@ private fun groupEvents(events: List<Event>): List<Pair<String, List<Event>>> {
     ).filter { it.second.isNotEmpty() }
 }
 
-/**
- * 右滑删除的包装：滑过一半即触发 [onDelete]，滑出过程中露出红色底衬。
- *
- * 始终从左往右滑，方向不随系统的文字布局方向改变。
- */
-@Composable
-private fun SwipeToDeleteBox(onDelete: () -> Unit, content: @Composable () -> Unit) {
-    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val deleteDirection = if (isRtl) SwipeToDismissBoxValue.EndToStart else SwipeToDismissBoxValue.StartToEnd
-    val currentDeleteDirection by rememberUpdatedState(deleteDirection)
-    val currentOnDelete by rememberUpdatedState(onDelete)
-    val haptics = rememberHaptics()
-    val state = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == currentDeleteDirection) {
-                currentOnDelete()
-                true
-            } else value == SwipeToDismissBoxValue.Settled
-        },
-        // 要滑过卡片宽度的一半才算数，避免列表滚动时蹭一下就误删
-        positionalThreshold = { it * 0.5f }
-    )
-    // 越过删除阈值时震一下，告诉手指「松开就删」
-    val armed = state.targetValue == deleteDirection
-    LaunchedEffect(armed) { if (armed) haptics.tick() }
-    SwipeToDismissBox(
-        state = state,
-        enableDismissFromStartToEnd = !isRtl,
-        enableDismissFromEndToStart = isRtl,
-        backgroundContent = {
-            val bg by animateColorAsState(
-                if (armed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.errorContainer,
-                label = "swipe"
-            )
-            val iconScale by animateFloatAsState(if (armed) 1.15f else 0.9f, label = "swipeIcon")
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(bg)
-                    .padding(horizontal = 24.dp),
-                contentAlignment = AbsoluteAlignment.CenterLeft
-            ) {
-                Icon(
-                    Icons.Outlined.Delete,
-                    contentDescription = "删除",
-                    tint = if (armed) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.graphicsLayer { scaleX = iconScale; scaleY = iconScale }
-                )
-            }
-        }
-    ) { content() }
-}
-
 @Composable
 private fun SectionHeader(text: String, count: Int) {
     Row(
@@ -411,6 +347,7 @@ private fun EventCard(
     event: Event,
     selected: Boolean,
     selecting: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -424,7 +361,7 @@ private fun EventCard(
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = container,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .pressable(scale = 0.98f, onLongClick = onLongClick, onClick = onClick)
