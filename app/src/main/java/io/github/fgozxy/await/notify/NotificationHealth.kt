@@ -33,7 +33,7 @@ data class NotificationHealth(val details: String, val homeWarning: String?) {
             }
             if (remote.isNotEmpty() || cloudConfigured) {
                 val cloudStatus = when {
-                    !deploymentReady -> "请先完成云端部署配置并验证连接"
+                    !deploymentReady -> "请先在「云端服务」中验证连接"
                     !canSync -> "当前连接仅可恢复备份；通知同步需先迁移手机绑定"
                     lastError.isNotEmpty() -> lastError + if (!retryPending) "" else if (syncedRevision == 0L)
                         "；后台自动重试，等待首次上传" else "；后台自动重试，服务器仍按上次同步设置提醒"

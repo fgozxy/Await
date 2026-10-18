@@ -34,7 +34,7 @@ object BackupService {
     }
 
     private fun verifiedConfig(context: Context, write: Boolean = false, bundle: JsonObject? = null): SyncSettings.Config {
-        check(CloudDeployment.isReady(context)) { "请先在云端部署配置中验证连接" }
+        check(CloudDeployment.isReady(context)) { "请先在「云端服务」中验证连接" }
         val config = SyncSettings.load(context)
         val response = ServerClient.request(config, "GET", "/v1/status")
         if (bundle != null) ServerClient.checkCalendar(response, bundle)

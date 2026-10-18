@@ -5,13 +5,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.EventRepeat
+import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.MoveToInbox
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,45 +27,46 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import io.github.fgozxy.await.backup.BackupScheduler
 import io.github.fgozxy.await.backup.BackupService
 import io.github.fgozxy.await.backup.BackupSettings
-import io.github.fgozxy.await.sync.CloudDeployment
 import io.github.fgozxy.await.data.BackupData
 import io.github.fgozxy.await.data.EventStore
+import io.github.fgozxy.await.sync.CloudDeployment
+import io.github.fgozxy.await.ui.components.*
 import io.github.fgozxy.await.vm.EventViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 「备份与恢复」整页对话框：本地导入导出 + Await 云端备份 + 定时备份设置。
+ * 「备份与恢复」：本地导出 + Await 云端备份 + 定时备份设置。
  * 所有设置改一次存一次，改完即生效，无需额外点保存。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
+fun BackupScreen(viewModel: EventViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
 
     var prefs by remember { mutableStateOf(BackupSettings.load(context)) }
     var busy by remember { mutableStateOf(false) }
     var busyText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-    var statusOk by remember { mutableStateOf(true) }
-    var showCloud by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var sheet by remember { mutableStateOf<String?>(null) }
+    // 云端改了连接（从这里点进「云端服务」再回来）后，备份能力跟着刷新
     val cloudStatus = rememberSyncStatus()
-    var showTimePicker by remember { mutableStateOf(false) }
+    val ready = remember(cloudStatus, Nav.stack.size) { CloudDeployment.backupsEnabled(context) }
+    val writable = remember(cloudStatus, Nav.stack.size) { CloudDeployment.canWriteBackup(context) }
+    val connected = remember(cloudStatus, Nav.stack.size) { CloudDeployment.isReady(context) }
 
-    // 待确认导入：解析出来的日程 + 来源说明（本地文件 / 云端文件名）
+    // 待确认导入：解析出来的日程 + 来源说明（云端文件名）
     var pendingImport by remember { mutableStateOf<Pair<BackupData.ImportBundle, String>?>(null) }
     var remoteFiles by remember { mutableStateOf<List<BackupService.Entry>?>(null) }
 
     fun report(ok: Boolean, msg: String) {
-        statusOk = ok
-        status = msg
+        if (ok) { status = null; toaster.show(msg) } else status = false to msg
     }
 
     /** 改设置：立刻落盘并重排定时备份 */
@@ -68,7 +77,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
     }
 
     /** 统一的「跑一个网络任务」包装：置忙、跑在 IO、回填状态 */
-    fun runTask(label: String, task: suspend () -> Result<String>) {
+    fun <T> runTask(label: String, task: suspend () -> Result<T>, onSuccess: (T) -> Unit) {
         if (busy) return
         busy = true
         busyText = label
@@ -77,8 +86,7 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
             val r = withContext(Dispatchers.IO) { task() }
             busy = false
             prefs = BackupSettings.load(context)
-            r.onSuccess { report(true, it) }
-                .onFailure { report(false, it.message ?: "操作失败") }
+            r.onSuccess(onSuccess).onFailure { report(false, it.message ?: "操作失败") }
         }
     }
 
@@ -101,287 +109,194 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
         }
     }
 
-    Dialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("备份与恢复") },
-                    navigationIcon = {
-                        IconButton(onClick = onDismiss, enabled = !busy) { Icon(Icons.Default.Close, "关闭") }
+    PageScaffold(title = "备份与恢复") { padding ->
+        PageColumn(padding) {
+            if (busy) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(busyText, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            status?.let { (ok, text) -> StatusCard(text, error = !ok) }
+
+            PrefGroup(
+                "云端备份",
+                footer = when {
+                    !connected -> "复用「云端服务」的连接，请先配置并验证。"
+                    !ready -> "服务器未开启备份：在部署指引中选择开启云端备份，执行命令后重新验证。"
+                    !writable -> "当前连接仅可恢复备份；上传与通知同步需先迁移手机绑定。"
+                    else -> "保存完整日程、备注、颜色、置顶和空分组，在服务器加密存储。"
+                }
+            ) {
+                PrefRow(
+                    title = "云端服务",
+                    icon = Icons.Outlined.Cloud,
+                    value = when {
+                        !connected -> "未配置"
+                        ready -> "备份已开启"
+                        else -> "备份未开启"
+                    },
+                    onClick = { Nav.go("cloud") }
+                )
+                PrefRow(
+                    title = "立即备份",
+                    subtitle = prefs.lastBackupText()?.let { "上次成功：$it" },
+                    icon = Icons.Outlined.CloudUpload,
+                    enabled = !busy && writable,
+                    onClick = {
+                        runTask("正在备份到云端…", { BackupService.backupNow(context, manual = true) }) {
+                            report(true, it)
+                        }
                     }
                 )
+                PrefRow(
+                    title = "恢复最新备份",
+                    icon = Icons.Outlined.Restore,
+                    enabled = !busy && ready,
+                    onClick = {
+                        runTask("正在下载最新备份…", { BackupService.fetchBackup(context, BackupService.LATEST_NAME) }) {
+                            pendingImport = it to "云端最新备份"
+                        }
+                    }
+                )
+                PrefRow(
+                    title = "从历史备份恢复",
+                    icon = Icons.Outlined.History,
+                    enabled = !busy && ready,
+                    onClick = {
+                        runTask("正在读取云端备份…", { BackupService.listBackups(context) }) { list ->
+                            if (list.isEmpty()) report(false, "云端还没有备份文件") else remoteFiles = list
+                        }
+                    }
+                )
+                PrefRow(
+                    title = "保留份数",
+                    subtitle = "下次备份时清理超出的旧版本",
+                    icon = Icons.Outlined.Inventory2,
+                    value = "${prefs.keepCount} 份",
+                    onClick = { sheet = "keep" }
+                )
             }
-        ) { padding ->
-            Column(
-                Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (busy) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text(busyText, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                status?.let {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (statusOk) MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Text(it, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+            if (prefs.lastResultMsg.isNotBlank() && !prefs.lastResultOk) {
+                StatusCard("最近一次失败：${prefs.lastResultMsg}", error = true)
+            }
 
-                // ── 本地备份 ──
-                SectionCard("本地备份", "导出为 JSON 文件保存到手机或发给自己") {
-                    Button(
-                        onClick = { exportLauncher.launch(BackupData.defaultFileName()) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.FileUpload, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("导出到文件")
+            PrefGroup(
+                "定时备份",
+                footer = if (prefs.autoEnabled)
+                    (BackupScheduler.nextTriggerText(prefs)?.let { "下次备份：$it。" } ?: "") +
+                        "关机、断网或后台受限时可能延迟，重新打开应用后会补做逾期备份。"
+                else null
+            ) {
+                SwitchRow(
+                    title = "自动备份",
+                    subtitle = "按周期自动上传到 Await 云端",
+                    icon = Icons.Outlined.EventRepeat,
+                    checked = prefs.autoEnabled,
+                    onChange = { on ->
+                        if (on && !CloudDeployment.canWriteBackup(context)) {
+                            toaster.show("请先验证云端连接，并在服务器开启备份功能")
+                        } else persist(prefs.copy(autoEnabled = on))
                     }
-                    Text(
-                        "导入日程（含从其他应用迁移）已挪到菜单里的「导入日程」。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (prefs.autoEnabled) {
+                    PrefRow(
+                        title = "频率",
+                        icon = Icons.Outlined.Description,
+                        value = BackupSettings.INTERVAL_OPTIONS.firstOrNull { it.first == prefs.intervalDays }?.second
+                            ?: "每 ${prefs.intervalDays} 天",
+                        onClick = { sheet = "interval" }
+                    )
+                    PrefRow(
+                        title = "备份时刻",
+                        icon = Icons.Outlined.Schedule,
+                        value = "%02d:%02d".format(prefs.hour, prefs.minute),
+                        onClick = { sheet = "time" }
+                    )
+                    SwitchRow(
+                        title = "仅在 WLAN 下备份",
+                        subtitle = "移动数据下跳过本次自动备份",
+                        icon = Icons.Outlined.Wifi,
+                        checked = prefs.wifiOnly,
+                        onChange = { persist(prefs.copy(wifiOnly = it)) }
                     )
                 }
+            }
 
-                SectionCard("云端备份", "复用 Await 云端连接，备份完整日程和空分组") {
-                    Text(cloudStatus, style = MaterialTheme.typography.bodySmall)
-                    val ready = CloudDeployment.backupsEnabled(context)
-                    val writable = CloudDeployment.canWriteBackup(context)
-                    Text(when {
-                        !CloudDeployment.isReady(context) -> "请先配置并验证 Await 云端连接。"
-                        !ready -> "服务器未开启备份，请在部署指引中选择开启云端备份，执行命令后重新验证。"
-                        !writable -> "当前连接仅可恢复备份；上传与通知同步需先迁移手机绑定。"
-                        else -> "云端备份已开启，数据加密保存在服务器持久化数据卷。"
-                    })
-                    OutlinedButton(onClick = { showCloud = true }, enabled = !busy) { Text("云端部署配置") }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            enabled = !busy && writable,
-                            onClick = {
-                                runTask("正在备份到云端…") { BackupService.backupNow(context, manual = true) }
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.CloudUpload, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("立即备份")
-                        }
-                    }
-                    OutlinedButton(
-                        enabled = !busy && ready,
-                        onClick = {
-                            if (busy) return@OutlinedButton
-                            busy = true
-                            busyText = "正在读取云端备份…"
-                            status = null
-                            scope.launch {
-                                val r = withContext(Dispatchers.IO) { BackupService.listBackups(context) }
-                                busy = false
-                                r.onSuccess { list ->
-                                    if (list.isEmpty()) report(false, "云端还没有备份文件")
-                                    else remoteFiles = list
-                                }.onFailure { report(false, it.message ?: "读取失败") }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.CloudDownload, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("从云端恢复")
-                    }
-                    // 最新备份与历史版本均由 Await 服务提供。
-                    TextButton(
-                        enabled = !busy && ready,
-                        onClick = {
-                            if (busy) return@TextButton
-                            busy = true
-                            busyText = "正在下载最新备份…"
-                            status = null
-                            scope.launch {
-                                val r = withContext(Dispatchers.IO) {
-                                    BackupService.fetchBackup(context, BackupService.LATEST_NAME)
-                                }
-                                busy = false
-                                r.onSuccess { pendingImport = it to "云端最新备份" }
-                                    .onFailure { report(false, it.message ?: "下载失败") }
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) { Text("恢复最新备份") }
-
-                    // 保留份数
-                    Text("云端保留份数（下次备份生效）", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BackupSettings.KEEP_OPTIONS.forEach { n ->
-                            FilterChip(
-                                selected = prefs.keepCount == n,
-                                onClick = { persist(prefs.copy(keepCount = n)) },
-                                label = { Text("$n 份") }
-                            )
-                        }
-                    }
-
-                    prefs.lastBackupText()?.let {
-                        Text(
-                            "上次成功备份：$it",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (prefs.lastResultMsg.isNotBlank()) {
-                        Text(
-                            (if (prefs.lastResultOk) "最近一次：" else "最近一次失败：") + prefs.lastResultMsg,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (prefs.lastResultOk) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-
-                // ── 定时备份 ──
-                SectionCard("定时备份", "手机按指定周期自动上传到 Await 云端") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("开启自动备份", Modifier.weight(1f))
-                        Switch(
-                            checked = prefs.autoEnabled,
-                            onCheckedChange = { on ->
-                                if (on && !CloudDeployment.canWriteBackup(context)) {
-                                    report(false, "请先验证云端连接，并在服务器开启备份功能")
-                                } else {
-                                    persist(prefs.copy(autoEnabled = on))
-                                }
-                            }
-                        )
-                    }
-                    if (prefs.autoEnabled) {
-                        Text("备份频率", style = MaterialTheme.typography.labelLarge)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            BackupSettings.INTERVAL_OPTIONS.forEach { (days, label) ->
-                                FilterChip(
-                                    selected = prefs.intervalDays == days,
-                                    onClick = { persist(prefs.copy(intervalDays = days)) },
-                                    label = { Text(label) }
-                                )
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("备份时刻", Modifier.weight(1f))
-                            TextButton(onClick = { showTimePicker = true }) {
-                                Text("%02d:%02d".format(prefs.hour, prefs.minute))
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("仅在 WLAN 下备份")
-                                Text(
-                                    "移动数据下跳过本次自动备份",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = prefs.wifiOnly,
-                                onCheckedChange = { persist(prefs.copy(wifiOnly = it)) }
-                            )
-                        }
-                        BackupScheduler.nextTriggerText(prefs)?.let {
-                            Text(
-                                "下次备份：$it",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Text(
-                            "自动备份由手机上传；关机、断网或后台受限时可能延迟，重新打开应用后会补做逾期备份。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
+            PrefGroup("本地", footer = "旧 WebDAV 备份的 JSON 文件可下载后通过「导入日程」恢复。") {
+                PrefRow(
+                    title = "导出到文件",
+                    subtitle = "保存为 JSON，可发给自己留存",
+                    icon = Icons.Outlined.FileUpload,
+                    onClick = { exportLauncher.launch(BackupData.defaultFileName()) }
+                )
+                PrefRow(
+                    title = "导入日程",
+                    icon = Icons.Outlined.MoveToInbox,
+                    onClick = { Nav.go("import") }
+                )
             }
         }
     }
 
-    if (showCloud) CloudDeploymentScreen(onDismiss = { showCloud = false; prefs = BackupSettings.load(context) })
-
-    // ── 备份时刻选择 ──
-    if (showTimePicker) {
-        val timeState = rememberTimePickerState(prefs.hour, prefs.minute, true)
-        AlertDialog(
-            onDismissRequest = { showTimePicker = false },
-            title = { Text("选择备份时刻") },
-            text = { TimePicker(timeState) },
-            confirmButton = {
-                TextButton(onClick = {
-                    persist(prefs.copy(hour = timeState.hour, minute = timeState.minute))
-                    showTimePicker = false
-                }) { Text("确定") }
-            },
-            dismissButton = { TextButton({ showTimePicker = false }) { Text("取消") } }
-        )
+    when (sheet) {
+        "keep" -> OptionSheet(
+            title = "云端保留份数",
+            options = BackupSettings.KEEP_OPTIONS.map { it to "$it 份" },
+            selected = prefs.keepCount,
+            onDismiss = { sheet = null }
+        ) { persist(prefs.copy(keepCount = it)) }
+        "interval" -> OptionSheet(
+            title = "备份频率",
+            options = BackupSettings.INTERVAL_OPTIONS,
+            selected = prefs.intervalDays,
+            onDismiss = { sheet = null }
+        ) { persist(prefs.copy(intervalDays = it)) }
+        "time" -> TimePickerDialog(
+            title = "备份时刻",
+            hour = prefs.hour,
+            minute = prefs.minute,
+            onDismiss = { sheet = null }
+        ) { h, m -> persist(prefs.copy(hour = h, minute = m)); sheet = null }
     }
 
     // ── 云端备份列表 ──
     remoteFiles?.let { files ->
-        AlertDialog(
-            onDismissRequest = { remoteFiles = null },
-            title = { Text("选择要恢复的备份") },
-            text = {
-                Column(
-                    Modifier
-                        .heightIn(max = 380.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    files.forEach { entry ->
-                        ListItem(
-                            headlineContent = { Text(entry.name, style = MaterialTheme.typography.bodyMedium) },
-                            supportingContent = {
-                                val detail = listOf(entry.modifiedText(), entry.sizeText())
-                                    .filter { it.isNotBlank() }.joinToString(" · ")
-                                if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall)
-                            },
-                            modifier = Modifier.clickable {
+        ModalBottomSheet(onDismissRequest = { remoteFiles = null }, sheetState = rememberModalBottomSheetState(true)) {
+            SheetTitle("选择要恢复的备份", "共 ${files.size} 份")
+            LazyColumn(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
+                items(files, key = { it.id }) { entry ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
                                 val name = entry.name
                                 remoteFiles = null
-                                busy = true
-                                busyText = "正在下载 $name…"
-                                status = null
-                                scope.launch {
-                                    val r = withContext(Dispatchers.IO) {
-                                        BackupService.fetchBackup(context, entry.id)
-                                    }
-                                    busy = false
-                                    r.onSuccess { pendingImport = it to "云端「$name」" }
-                                        .onFailure { report(false, it.message ?: "下载失败") }
+                                runTask("正在下载 $name…", { BackupService.fetchBackup(context, entry.id) }) {
+                                    pendingImport = it to "云端「$name」"
                                 }
                             }
-                        )
+                            .padding(horizontal = 24.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Outlined.CloudDownload, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            val detail = listOf(entry.modifiedText(), entry.sizeText())
+                                .filter { it.isNotBlank() }.joinToString(" · ")
+                            if (detail.isNotBlank()) {
+                                Text(detail, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
                 }
-            },
-            confirmButton = { TextButton({ remoteFiles = null }) { Text("取消") } }
-        )
+            }
+        }
     }
 
-    // ── 导入方式确认（云端恢复用；本地导入已挪到「导入日程」）──
+    // ── 导入方式确认（云端恢复用）──
     pendingImport?.let { (bundle, from) ->
         ImportConfirmDialog(
             bundle = bundle,
@@ -390,28 +305,5 @@ fun BackupScreen(viewModel: EventViewModel, onDismiss: () -> Unit) {
             onDismiss = { pendingImport = null },
             onDone = { ok, msg -> pendingImport = null; report(ok, msg) }
         )
-    }
-}
-
-/** 带标题与说明的分区卡片 */
-@Composable
-internal fun SectionCard(
-    title: String,
-    subtitle: String,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            content()
-        }
     }
 }

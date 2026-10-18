@@ -9,21 +9,25 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -35,6 +39,7 @@ import io.github.fgozxy.await.notify.NotificationChannels
 import io.github.fgozxy.await.notify.NotificationHealth
 import io.github.fgozxy.await.notify.ReminderSettings
 import io.github.fgozxy.await.sync.*
+import io.github.fgozxy.await.ui.components.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,22 +79,26 @@ fun rememberNotificationHealth(): NotificationHealth {
     }
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotificationScreen(onDismiss: () -> Unit) {
+fun NotificationScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val haptics = rememberHaptics()
     var channels by remember { mutableStateOf(NotificationChannels.load(context)) }
     var defaultTime by remember { mutableStateOf(ReminderSettings.load(context)) }
     var showDefaultTimePicker by remember { mutableStateOf(false) }
-    var showCloud by remember { mutableStateOf(false) }
-    var configuringChannel by remember { mutableStateOf<NotificationChannel?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf("") }
-    val syncStatus = rememberSyncStatus()
+    var report by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val health = rememberNotificationHealth()
+    // 健康状态随回到前台刷新，权限读数跟着这次重组一起更新
+    val localAllowed = LocalNotifications.allowed(context)
+    val exactAllowed = LocalNotifications.exactAllowed(context)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         LocalNotifications.reschedule(context)
-        result = if (it) "软件通知权限已开启" else "软件通知权限未开启，可在系统设置中允许"
+        toaster.show(if (it) "软件通知权限已开启" else "软件通知权限未开启，可在系统设置中允许")
     }
 
     fun requestLocalPermission() {
@@ -99,38 +108,43 @@ fun NotificationScreen(onDismiss: () -> Unit) {
         } else {
             runCatching { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                 .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
-                .onFailure { result = "无法打开系统设置，请手动允许 Await 通知" }
+                .onFailure { toaster.show("无法打开系统设置，请手动允许 Await 通知") }
         }
     }
 
-    fun save() {
-        if (channels.isEmpty()) { result = "请至少选择一种通知渠道"; return }
-        val remote = NotificationChannels.remote(channels)
-        if (remote.isNotEmpty() && !CloudDeployment.canSync(context)) {
-            result = "请先完成云端部署配置并验证连接"
-            return
+    /** 勾选即保存；校验规则与原「保存通知设置」一致，关闭渠道不受云端状态限制。 */
+    fun toggle(channel: NotificationChannel, enabled: Boolean) {
+        val next = if (enabled) channels + channel else channels - channel
+        if (next.isEmpty()) { haptics.reject(); toaster.show("请至少保留一种通知渠道"); return }
+        if (enabled && channel != NotificationChannel.LOCAL) {
+            if (!CloudDeployment.canSync(context)) {
+                haptics.reject(); toaster.show("请先在「云端服务」中验证连接", "去配置") { Nav.go("cloud") }; return
+            }
+            if (channel.wireName !in CloudDeployment.available(context)) {
+                haptics.reject()
+                toaster.show("请先配置 ${channel.label}", "去配置") { Nav.go("channel", channel.wireName) }
+                return
+            }
         }
-        if (!CloudDeployment.available(context).containsAll(remote)) {
-            result = "请先配置所选消息渠道，再开启通知"
-            return
-        }
+        val previous = channels
+        channels = next
         busy = true
         scope.launch {
             val successful = withContext(Dispatchers.IO) {
                 try {
                     synchronized(SyncCoordinator.lock) {
-                        NotificationChannels.save(context, channels)
+                        NotificationChannels.save(context, next)
                         SyncSettings.prefs(context).edit().putString("last_error", "").apply()
                         SyncCoordinator.changed(context)
                     }
                     true
                 } catch (_: Exception) { false }
             }
-            result = if (successful) "通知渠道已保存" +
-                (if (SyncSettings.load(context).isValid) "；云端设置联网后自动同步" else "")
-                else "保存失败，请稍后重试"
             busy = false
-            if (successful && NotificationChannel.LOCAL in channels && !LocalNotifications.allowed(context)) {
+            if (!successful) {
+                channels = previous
+                toaster.show("保存失败，请稍后重试")
+            } else if (enabled && channel == NotificationChannel.LOCAL && !LocalNotifications.allowed(context)) {
                 requestLocalPermission()
             }
         }
@@ -138,9 +152,9 @@ fun NotificationScreen(onDismiss: () -> Unit) {
 
     fun remoteTask(test: Boolean) {
         val draft = SyncSettings.load(context)
-        if (!CloudDeployment.isReady(context)) { result = "请先验证云端部署配置"; return }
+        if (!CloudDeployment.isReady(context)) { toaster.show("请先在「云端服务」中验证连接"); return }
         val remote = NotificationChannels.remote(channels)
-        if (test && remote.isEmpty()) { result = "请先选择 Telegram 或 ntfy"; return }
+        if (test && remote.isEmpty()) { toaster.show("请先开启 Telegram 或 ntfy 通知"); return }
         busy = true
         scope.launch {
             try {
@@ -160,134 +174,168 @@ fun NotificationScreen(onDismiss: () -> Unit) {
                             status["lastError"].asString.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
                     }
                 }
-                result = taskResult
+                report = (if (test) "测试结果" else "服务器状态") to taskResult
             } catch (e: ServerException) {
-                result = e.message.orEmpty()
+                report = "请求失败" to e.message.orEmpty()
             } catch (_: Exception) {
-                result = "服务器返回的状态格式不正确"
+                report = "请求失败" to "服务器返回的状态格式不正确"
             } finally {
                 busy = false
             }
         }
     }
 
-    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Scaffold(topBar = {
-            TopAppBar(title = { Text("通知设置") }, navigationIcon = {
-                IconButton(onClick = onDismiss, enabled = !busy) { Icon(Icons.Default.Close, "关闭") }
-            })
-        }) { padding ->
-            Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("可选择一个或多个通知渠道。日程默认使用下方时刻，开启日程的「精准时间」后可单独设置。")
-                Text("默认通知时间", style = MaterialTheme.typography.titleMedium)
-                Text(defaultTime.display(), style = MaterialTheme.typography.headlineMedium)
-                Text("修改后，所有未开启精准时间的日程都会跟随；已开启的日程保留自定义时刻。")
-                OutlinedButton(onClick = { showDefaultTimePicker = true }, enabled = !busy) { Text("修改默认时间") }
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth().toggleable(value = NotificationChannel.LOCAL in channels, enabled = !busy,
-                    role = Role.Checkbox, onValueChange = { enabled ->
-                        channels = if (enabled) channels + NotificationChannel.LOCAL else channels - NotificationChannel.LOCAL
-                    }), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = NotificationChannel.LOCAL in channels, onCheckedChange = null, enabled = !busy)
-                    Text("软件通知")
-                }
+    val deployed = CloudDeployment.canSync(context)
+    val available = CloudDeployment.available(context)
+    PageScaffold(title = "通知") { padding ->
+        PageColumn(padding) {
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            StatusCard(health.details, error = health.homeWarning != null)
+
+            PrefGroup("默认时间", footer = "未开启「精准时间」的日程都在这个时刻提醒") {
+                PrefRow(
+                    title = "默认通知时间",
+                    icon = Icons.Outlined.Schedule,
+                    value = defaultTime.display(),
+                    enabled = !busy,
+                    onClick = { showDefaultTimePicker = true }
+                )
+            }
+
+            PrefGroup("软件通知", footer = "在本机发送，无需服务器或网络。关机时无法通知，开机后补发最近 24 小时内的提醒。") {
+                SwitchRow(
+                    title = "软件通知",
+                    subtitle = "可划走的普通通知，不持续响铃",
+                    icon = Icons.Outlined.PhoneAndroid,
+                    checked = NotificationChannel.LOCAL in channels,
+                    enabled = !busy,
+                    onChange = { toggle(NotificationChannel.LOCAL, it) }
+                )
                 if (NotificationChannel.LOCAL in channels) {
-                    Text("软件通知是常规消息通知，可划走或点击查看，不持续响铃。在本机发送，无需服务器或网络。手机关机时无法通知，重新开机后补发最近 24 小时内已安排的提醒。")
-                    OutlinedButton(onClick = ::requestLocalPermission, enabled = !busy) { Text("允许软件通知") }
+                    PrefRow(
+                        title = "通知权限",
+                        icon = Icons.Outlined.NotificationsActive,
+                        value = if (localAllowed) "已允许" else "去允许",
+                        subtitle = if (localAllowed) null else "未允许时收不到软件通知",
+                        subtitleIsError = !localAllowed,
+                        onClick = ::requestLocalPermission
+                    )
                     if (Build.VERSION.SDK_INT >= 31) {
-                        OutlinedButton(onClick = {
-                            runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                                Uri.parse("package:${context.packageName}"))) }
-                                .onFailure { result = "无法打开系统设置，请手动允许 Await 闹钟和提醒" }
-                        }, enabled = !busy) { Text("允许精确提醒") }
+                        PrefRow(
+                            title = "精确提醒",
+                            icon = Icons.Outlined.Alarm,
+                            value = if (exactAllowed) "已允许" else "去允许",
+                            subtitle = if (exactAllowed) null else "未允许时提醒可能延迟",
+                            onClick = {
+                                runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                    Uri.parse("package:${context.packageName}"))) }
+                                    .onFailure { toaster.show("无法打开系统设置，请手动允许 Await 闹钟和提醒") }
+                            }
+                        )
                     }
-                    OutlinedButton(onClick = {
-                        result = if (LocalNotifications.show(context, "✅ Await 软件通知测试", "test"))
-                            "软件测试通知已发送" else "请先允许软件通知权限"
-                    }, enabled = !busy) { Text("测试软件通知") }
+                    PrefRow(
+                        title = "发送测试通知",
+                        icon = Icons.AutoMirrored.Outlined.Send,
+                        onClick = {
+                            toaster.show(if (LocalNotifications.show(context, "✅ Await 软件通知测试", "test"))
+                                "软件测试通知已发送" else "请先允许软件通知权限")
+                        }
+                    )
                 }
-                HorizontalDivider()
-                Text("第一步：云端部署配置", style = MaterialTheme.typography.titleMedium)
-                val deployed = CloudDeployment.canSync(context)
-                Text(if (deployed) "云端连接已验证。可继续配置消息渠道。" else
-                    "先部署 Await 服务并验证连接，再配置 Telegram 和 ntfy。软件通知可独立使用。")
-                Button(onClick = { showCloud = true }, enabled = !busy) {
-                    Text(if (deployed) "查看或修改云端部署" else "配置云端部署")
-                }
-                HorizontalDivider()
-                Text("第二步：消息渠道", style = MaterialTheme.typography.titleMedium)
+            }
+
+            PrefGroup("云端推送", footer = "由服务器发送，手机关机后仍会推送已同步的日程。关闭渠道需同步成功才会取消服务器待发提醒。") {
+                PrefRow(
+                    title = "云端服务",
+                    icon = Icons.Outlined.Cloud,
+                    value = if (deployed) "已连接" else "未配置",
+                    onClick = { Nav.go("cloud") }
+                )
                 listOf(NotificationChannel.TELEGRAM, NotificationChannel.NTFY).forEach { channel ->
-                    val ready = deployed && channel.wireName in CloudDeployment.available(context)
+                    val ready = deployed && channel.wireName in available
                     val selected = channel in channels
                     val canToggle = !busy && (ready || selected)
-                    Row(Modifier.fillMaxWidth().toggleable(value = selected, enabled = canToggle,
-                        role = Role.Checkbox, onValueChange = { enabled ->
-                            channels = if (enabled) channels + channel else channels - channel
-                        }), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = selected, onCheckedChange = null, enabled = canToggle)
-                        Text(channel.label)
+                    PrefRow(
+                        title = channel.label,
+                        icon = if (channel == NotificationChannel.TELEGRAM) Icons.Outlined.Forum else Icons.Outlined.Campaign,
+                        subtitle = when {
+                            !deployed -> "需先连接云端服务"
+                            ready -> "已配置，点按修改参数"
+                            else -> "未配置，点按填写参数"
+                        },
+                        onClick = {
+                            if (CloudDeployment.canConfigureChannels(context)) Nav.go("channel", channel.wireName)
+                            else if (!deployed) toaster.show("请先连接云端服务", "去配置") { Nav.go("cloud") }
+                            else toaster.show("当前服务只支持服务器端配置渠道，请升级 Await 云端服务")
+                        },
+                        trailing = {
+                            VerticalDivider(Modifier.height(32.dp).padding(end = 12.dp))
+                            Switch(checked = selected, enabled = canToggle, onCheckedChange = {
+                                haptics.tick(); toggle(channel, it)
+                            })
+                        }
+                    )
+                }
+                PrefRow(
+                    title = "测试云端推送",
+                    icon = Icons.AutoMirrored.Outlined.Send,
+                    enabled = !busy && deployed && NotificationChannels.remote(channels).isNotEmpty(),
+                    onClick = { remoteTask(true) }
+                )
+                PrefRow(
+                    title = "服务器状态",
+                    icon = Icons.Outlined.Dns,
+                    enabled = !busy && deployed,
+                    onClick = { remoteTask(false) }
+                )
+            }
+
+            val clipboard = LocalClipboardManager.current
+            PrefGroup(footer = "同一服务器绑定一台手机；更换服务器后需停用旧服务器。") {
+                PrefRow(
+                    title = "本机安装 ID",
+                    subtitle = SyncSettings.clientId(context),
+                    icon = Icons.Outlined.Fingerprint,
+                    onClick = {
+                        clipboard.setText(AnnotatedString(SyncSettings.clientId(context)))
+                        toaster.show("安装 ID 已复制")
                     }
-                    Text(when {
-                        !deployed -> "完成云端部署配置后可设置此渠道"
-                        ready -> "渠道已配置，可以勾选开启"
-                        else -> "渠道尚未配置，请先填写参数"
-                    }, style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = { configuringChannel = channel },
-                        enabled = !busy && CloudDeployment.canConfigureChannels(context)) {
-                        Text("配置 ${channel.label}")
-                    }
-                }
-                if (deployed && !CloudDeployment.canConfigureChannels(context)) {
-                    Text("当前服务只支持服务器端配置渠道；升级 Await 云端服务后可直接在手机填写参数。")
-                }
-                Text("第三步：勾选渠道并保存", style = MaterialTheme.typography.titleMedium)
-                Button(onClick = ::save, enabled = !busy) { Text("保存通知设置") }
-                OutlinedButton(onClick = { remoteTask(true) }, enabled = !busy && deployed) { Text("测试所选云端渠道") }
-                OutlinedButton(onClick = { remoteTask(false) }, enabled = !busy && deployed) { Text("查看服务器状态") }
-                Text(syncStatus, color = MaterialTheme.colorScheme.primary)
-                if (SyncSettings.load(context).isValid) {
-                    Text("云端每 15 分钟自动同步；修改日程或设置后及时上传。后台省电限制可能延迟同步。",
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                if (result.isNotBlank()) Text(result)
-                Text("关闭云端渠道后需完成一次同步，服务器才会取消待发提醒。同一服务器绑定一台手机；更换服务器后需停用旧服务器。",
-                    style = MaterialTheme.typography.bodySmall)
-                SelectionContainer { Text("本机安装 ID：${SyncSettings.clientId(context)}", style = MaterialTheme.typography.bodySmall) }
+                )
             }
         }
     }
+
     if (showDefaultTimePicker) {
-        val timeState = rememberTimePickerState(defaultTime.hour, defaultTime.minute, true)
+        TimePickerDialog(
+            title = "默认通知时间",
+            hour = defaultTime.hour,
+            minute = defaultTime.minute,
+            confirm = "保存",
+            enabled = !busy,
+            onDismiss = { showDefaultTimePicker = false }
+        ) { hour, minute ->
+            val selectedTime = ReminderSettings.Time(hour, minute)
+            busy = true
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { ReminderSettings.save(context, selectedTime) }
+                    defaultTime = selectedTime
+                    showDefaultTimePicker = false
+                    toaster.show("默认时间已保存，本机提醒已重排；云端联网同步后生效")
+                } catch (_: Exception) {
+                    toaster.show("保存默认时间失败，请重试")
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
+    report?.let { (title, text) ->
         AlertDialog(
-            onDismissRequest = { if (!busy) showDefaultTimePicker = false },
-            title = { Text("默认通知时间") },
-            text = { TimePicker(timeState) },
-            confirmButton = {
-                TextButton(enabled = !busy, onClick = {
-                    val selectedTime = ReminderSettings.Time(timeState.hour, timeState.minute)
-                    busy = true
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) { ReminderSettings.save(context, selectedTime) }
-                            defaultTime = selectedTime
-                            showDefaultTimePicker = false
-                            result = "默认时间已保存，本机提醒已重排；云端联网同步后生效"
-                        } catch (_: Exception) {
-                            result = "保存默认时间失败，请重试"
-                        } finally {
-                            busy = false
-                        }
-                    }
-                }) { Text("保存") }
-            },
-            dismissButton = { TextButton(enabled = !busy, onClick = { showDefaultTimePicker = false }) { Text("取消") } }
+            onDismissRequest = { report = null },
+            title = { Text(title) },
+            text = { SelectionContainer { Text(text) } },
+            confirmButton = { TextButton(onClick = { report = null }) { Text("好") } }
         )
     }
-    if (showCloud) CloudDeploymentScreen(onDismiss = { showCloud = false })
-    configuringChannel?.let { channel ->
-        CloudChannelScreen(channel, onDismiss = { configuringChannel = null })
-    }
-
 }

@@ -85,15 +85,46 @@ class EventViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
-    fun togglePin(eventId: Long) {
+    /** 批量删除（多选），返回被删掉的日程，供「撤销」原样放回。 */
+    fun delete(eventIds: Set<Long>): List<Event> {
+        if (eventIds.isEmpty()) return emptyList()
         val ctx = getApplication<Application>()
         val list = EventStore.load(ctx)
-        val i = list.indexOfFirst { it.id == eventId }
-        if (i >= 0) {
-            list[i] = list[i].copy(pinned = !list[i].pinned)
+        val removed = list.filter { it.id in eventIds }
+        if (removed.isEmpty()) return removed
+        list.removeAll { it.id in eventIds }
+        EventStore.save(ctx, list)
+        refresh()
+        return removed
+    }
+
+    /** 批量放回（撤销批量删除）；id 相同的视为更新。 */
+    fun upsertAll(events: List<Event>) {
+        if (events.isEmpty()) return
+        val ctx = getApplication<Application>()
+        val byId = events.associateBy { it.id }
+        val list = EventStore.load(ctx)
+        val kept = list.filter { it.id !in byId }
+        EventStore.save(ctx, kept + events)
+        refresh()
+    }
+
+    /** 批量置顶 / 取消置顶，返回实际改动的条数。 */
+    fun setPinned(eventIds: Set<Long>, pinned: Boolean): Int {
+        val ctx = getApplication<Application>()
+        val list = EventStore.load(ctx)
+        var count = 0
+        for (i in list.indices) {
+            if (list[i].id in eventIds && list[i].pinned != pinned) {
+                list[i] = list[i].copy(pinned = pinned)
+                count++
+            }
+        }
+        if (count > 0) {
             EventStore.save(ctx, list)
             refresh()
         }
+        return count
     }
 
     /**

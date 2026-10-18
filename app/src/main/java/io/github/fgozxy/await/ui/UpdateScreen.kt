@@ -4,34 +4,40 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.HourglassTop
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import io.github.fgozxy.await.ui.components.*
 import io.github.fgozxy.await.update.AutoUpdate
 import io.github.fgozxy.await.update.ReleaseInfo
 import io.github.fgozxy.await.update.UpdateException
 import io.github.fgozxy.await.update.UpdateManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UpdateScreen(initial: ReleaseInfo? = null, onDismiss: () -> Unit) {
+fun UpdateScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
     val current = remember { UpdateManager.currentVersion(context) }
+    val initial = remember { UpdateState.available.value }
     var release by remember { mutableStateOf(initial) }
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -53,8 +59,9 @@ fun UpdateScreen(initial: ReleaseInfo? = null, onDismiss: () -> Unit) {
         scope.launch {
             try {
                 release = UpdateManager.checkLatest(current)
+                UpdateState.available.value = release
                 ready = null
-                result = if (release == null) "当前已是最新版本" else "发现新版本 ${release!!.versionName}"
+                result = if (release == null) "当前已是最新版本" else ""
             } catch (e: CancellationException) { throw e }
               catch (e: UpdateException) { result = e.message.orEmpty() }
               catch (_: Exception) { result = "检查更新失败，请稍后重试" }
@@ -95,47 +102,86 @@ fun UpdateScreen(initial: ReleaseInfo? = null, onDismiss: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) { if (initial == null) check() else result = "发现新版本 ${initial.versionName}" }
+    LaunchedEffect(Unit) { if (initial == null) check() }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            topBar = { TopAppBar(title = { Text("软件更新") }, navigationIcon = {
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "关闭") }
-            }) }
-        ) { padding ->
-            Column(Modifier.padding(padding).padding(20.dp).fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("当前版本 $current", style = MaterialTheme.typography.titleMedium)
-                Row {
-                    Checkbox(checked = automatic, onCheckedChange = { automatic = it; AutoUpdate.setEnabled(context, it) })
-                    Text("打开软件时自动检查更新（每天一次）", modifier = Modifier.padding(top = 12.dp))
+    PageScaffold(title = "软件更新") { padding ->
+        PageColumn(padding) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier.size(80.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Outlined.HourglassTop, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.onPrimary)
                 }
-                Text(result)
-                if (busy) {
-                    progress?.let { LinearProgressIndicator(progress = { it / 100f }, modifier = Modifier.fillMaxWidth()) }
-                        ?: LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    progress?.let { Text("已下载 $it%") }
+                Spacer(Modifier.height(12.dp))
+                Text("Await", style = MaterialTheme.typography.titleLarge)
+                Text("版本 $current", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            release?.let { info ->
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("新版本 ${info.versionName}", style = MaterialTheme.typography.titleLarge)
+                        Text("安装包 %.1f MB".format(info.sizeBytes / 1024.0 / 1024.0),
+                            style = MaterialTheme.typography.labelLarge)
+                        Text(info.notes.ifBlank { "此版本没有更新说明" }, style = MaterialTheme.typography.bodyMedium)
+                        progress?.let {
+                            LinearProgressIndicator(progress = { it / 100f }, modifier = Modifier.fillMaxWidth())
+                            Text("已下载 $it%", style = MaterialTheme.typography.labelMedium)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(enabled = !busy, onClick = {
+                                val apk = ready
+                                if (apk != null && apk.isFile) install(apk) else download(info)
+                            }) { Text(if (ready == null) "下载并安装" else "安装更新") }
+                            if (progress != null) {
+                                TextButton(onClick = { toaster.show("已取消下载"); downloadJob?.cancel() }) { Text("取消下载") }
+                            }
+                        }
+                    }
                 }
-                Button(onClick = { check() }, enabled = !busy) { Text("检查更新") }
-                release?.let { info ->
-                    HorizontalDivider()
-                    Text("新版本 ${info.versionName}", style = MaterialTheme.typography.titleLarge)
-                    Text("安装包 %.1f MB".format(info.sizeBytes / 1024.0 / 1024.0))
-                    Text(info.notes.ifBlank { "此版本没有更新说明" })
-                    Button(enabled = !busy, onClick = {
-                        val apk = ready
-                        if (apk != null && apk.isFile) install(apk) else download(info)
-                    }) { Text(if (ready == null) "下载并安装" else "安装更新") }
-                }
-                if (progress != null) {
-                    TextButton(onClick = { result = "已取消下载"; downloadJob?.cancel() }) { Text("取消下载") }
-                }
-                TextButton(onClick = {
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
-                        release?.releaseUrl ?: "https://github.com/fgozxy/Await/releases/latest"))) }
-                        .onFailure { result = "无法打开浏览器" }
-                }) { Text("在 GitHub 查看发布版本") }
+            }
+            if (result.isNotBlank()) {
+                Text(
+                    result,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+
+            PrefGroup(footer = "更新来自 GitHub Releases，优先经 HubProxy 加速；下载后校验 SHA-256、包名和签名。") {
+                PrefRow(
+                    title = "检查更新",
+                    icon = Icons.Outlined.Refresh,
+                    enabled = !busy,
+                    onClick = ::check,
+                    trailing = if (busy && progress == null) {
+                        { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+                    } else null
+                )
+                SwitchRow(
+                    title = "自动检查更新",
+                    subtitle = "打开软件时每天检查一次",
+                    icon = Icons.Outlined.Update,
+                    checked = automatic,
+                    onChange = { automatic = it; AutoUpdate.setEnabled(context, it) }
+                )
+                PrefRow(
+                    title = "在 GitHub 查看发布版本",
+                    icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                    onClick = {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
+                            release?.releaseUrl ?: "https://github.com/fgozxy/Await/releases/latest"))) }
+                            .onFailure { toaster.show("无法打开浏览器") }
+                    }
+                )
             }
         }
     }

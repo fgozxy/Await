@@ -1,654 +1,276 @@
 package io.github.fgozxy.await.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.selection.triStateToggleable
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DriveFileMove
-import androidx.compose.material.icons.filled.Label
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.automirrored.outlined.EventNote
+import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.AbsoluteAlignment
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import io.github.fgozxy.await.data.Event
+import io.github.fgozxy.await.ui.components.*
 import io.github.fgozxy.await.ui.theme.EventColors
 import io.github.fgozxy.await.vm.EventViewModel
-import io.github.fgozxy.await.update.AutoUpdate
-import io.github.fgozxy.await.update.ReleaseInfo
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
-import java.time.LocalDate
-import android.widget.Toast
 
-/** 首页：日程列表 + 搜索 + 新增入口 */
+/** 「日程」标签页：分组筛选 + 搜索 + 列表；长按进入多选。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(
-    viewModel: EventViewModel,
-    modifier: Modifier = Modifier
-) {
+fun HomeScreen(viewModel: EventViewModel) {
     val events by viewModel.events.collectAsStateWithLifecycle()
-    var query by remember { mutableStateOf("") }
-    var searching by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Event?>(null) }
-    var creating by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // 备份与恢复 / 导入日程
-    var showBackup by remember { mutableStateOf(false) }
-    var showImport by remember { mutableStateOf(false) }
-    var showNotifications by remember { mutableStateOf(false) }
-    var showCloudDeployment by remember { mutableStateOf(false) }
-    var showUpdate by remember { mutableStateOf(false) }
-    var availableUpdate by remember { mutableStateOf<ReleaseInfo?>(null) }
+    val existingGroups by viewModel.groups.collectAsStateWithLifecycle()
+    val toaster = LocalToaster.current
+    val haptics = rememberHaptics()
     val notificationHealth = rememberNotificationHealth()
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) scope.launch {
-                try { availableUpdate = AutoUpdate.check(context) ?: availableUpdate }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* 自动检查失败时，仍可通过菜单手动检查。 */ }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var selectedGroup by Nav.groupFilter
+    var selection by remember { mutableStateOf(setOf<Long>()) }
+    val selecting = selection.isNotEmpty()
+    var moving by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    // 日程被别处删掉（导入覆盖、分组删除）后，多选里不再留着它们
+    LaunchedEffect(events) {
+        val live = events.map { it.id }.toSet()
+        if (!live.containsAll(selection)) selection = selection intersect live
+    }
+    // 筛选的分组被删掉时回到「全部」
+    LaunchedEffect(existingGroups, events) {
+        val g = selectedGroup
+        if (g != null && g.isNotEmpty() && g !in existingGroups) selectedGroup = null
+        if (g == "" && events.none { it.group.isBlank() }) selectedGroup = null
     }
 
-    // 分组管理：selectedForDelete 是勾选集合，空串 "" 代表「未分组」这个默认分组
-    var showManageGroups by remember { mutableStateOf(false) }
-    var selectedForDelete by remember { mutableStateOf(setOf<String>()) }
-    var confirmDeleteGroups by remember { mutableStateOf<Set<String>?>(null) }
-    var newGroupName by remember { mutableStateOf("") }
+    BackHandler(enabled = selecting) { selection = emptySet() }
+    BackHandler(enabled = searching && !selecting) { searching = false; query = "" }
 
-    // 批量分配：对话框开关 / 目标分组 / 勾选的日程 id
-    var showAssign by remember { mutableStateOf(false) }
-    var assignTarget by remember { mutableStateOf<String?>(null) }
-    var assignSelection by remember { mutableStateOf(setOf<Long>()) }
-
-    // 分组筛选：null=全部，""=未分组，其他=指定分组名
-    var selectedGroup by remember { mutableStateOf<String?>(null) }
-
-    val matched = events.filter {
-        query.isBlank() || it.title.contains(query, true) || it.note.contains(query, true)
-    }
-    // 现有分组列表：显式建过的空分组也在内，所以取 ViewModel 而不是从日程现推
-    val existingGroups by viewModel.groups.collectAsStateWithLifecycle()
     val hasUngrouped = events.any { it.group.isBlank() }
-
-    val filtered = matched.filter {
-        selectedGroup == null || it.group == selectedGroup
+    val filtered = events.filter {
+        (query.isBlank() || it.title.contains(query, true) || it.note.contains(query, true)) &&
+            (selectedGroup == null || it.group == selectedGroup)
     }
-    val groups = groupEvents(filtered)
+    val sections = groupEvents(filtered)
 
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    // 右滑删除：先删掉，再给一条可撤销的提示。撤销走 upsert，日程和服务器提醒一起恢复
-    fun deleteWithUndo(event: Event) {
-        viewModel.delete(event.id)
-        scope.launch {
-            val result = snackbarHostState.showSnackbar(
-                message = "已删除「${event.title}」",
-                actionLabel = "撤销",
-                withDismissAction = true,
-                duration = SnackbarDuration.Short
-            )
-            if (result == SnackbarResult.ActionPerformed) viewModel.upsert(event)
-        }
+    fun deleteWithUndo(ids: Set<Long>) {
+        val removed = viewModel.delete(ids)
+        selection = emptySet()
+        if (removed.isEmpty()) return
+        haptics.confirm()
+        toaster.show(
+            if (removed.size == 1) "已删除「${removed[0].title}」" else "已删除 ${removed.size} 条日程",
+            "撤销"
+        ) { viewModel.upsertAll(removed) }
     }
 
-    Scaffold(
-        modifier = modifier,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { if (!searching) Text("Await") },
-                actions = {
-                    if (searching) {
-                        TextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            placeholder = { Text("搜索日程…") },
-                            singleLine = true,
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    IconButton(onClick = {
-                        searching = !searching
-                        if (!searching) query = ""
-                    }) {
-                        Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "搜索")
-                    }
-                    // ⋮ 菜单
-                    var menuOpen by remember { mutableStateOf(false) }
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Default.MoreVert, "更多")
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text("软件更新") },
-                            onClick = { menuOpen = false; showUpdate = true },
-                            leadingIcon = { Icon(Icons.Default.SystemUpdate, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("云端部署配置") },
-                            onClick = { menuOpen = false; showCloudDeployment = true },
-                            leadingIcon = { Icon(Icons.Default.CloudSync, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("通知设置") },
-                            onClick = { menuOpen = false; showNotifications = true },
-                            leadingIcon = { Icon(Icons.Default.NotificationsActive, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("导入日程") },
-                            onClick = { menuOpen = false; showImport = true },
-                            leadingIcon = { Icon(Icons.Default.MoveToInbox, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("备份与恢复") },
-                            onClick = { menuOpen = false; showBackup = true },
-                            leadingIcon = { Icon(Icons.Default.CloudSync, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("管理分组") },
-                            onClick = { menuOpen = false; showManageGroups = true },
-                            leadingIcon = { Icon(Icons.Default.Label, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("分配日程到分组") },
-                            onClick = {
-                                menuOpen = false
-                                assignTarget = null
-                                assignSelection = emptySet()
-                                showAssign = true
-                            },
-                            leadingIcon = { Icon(Icons.Default.DriveFileMove, null) }
-                        )
-                    }
-                }
-            )
+    val listState = rememberLazyListState()
+    val fabExpanded by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+
+    PageScaffold(
+        title = "Await",
+        navIcon = null,
+        bottomInset = false,
+        topBar = { behavior ->
+            when {
+                selecting -> TopAppBar(
+                    title = { Text("已选 ${selection.size} 项") },
+                    navigationIcon = {
+                        IconButton(onClick = { selection = emptySet() }) { Icon(Icons.Default.Close, "退出多选") }
+                    },
+                    actions = {
+                        val chosen = events.filter { it.id in selection }
+                        val allPinned = chosen.isNotEmpty() && chosen.all { it.pinned }
+                        IconButton(onClick = {
+                            val visible = filtered.map { it.id }.toSet()
+                            selection = if (selection.containsAll(visible)) emptySet() else visible
+                        }) { Icon(Icons.Outlined.SelectAll, "全选") }
+                        IconButton(onClick = {
+                            val n = viewModel.setPinned(selection, !allPinned)
+                            selection = emptySet()
+                            toaster.show(if (allPinned) "已取消置顶 $n 条" else "已置顶 $n 条")
+                        }) {
+                            Icon(if (allPinned) Icons.Outlined.PushPin else Icons.Filled.PushPin,
+                                if (allPinned) "取消置顶" else "置顶")
+                        }
+                        IconButton(onClick = { moving = true }) {
+                            Icon(Icons.AutoMirrored.Filled.DriveFileMove, "移到分组")
+                        }
+                        IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Outlined.Delete, "删除") }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    )
+                )
+                searching -> SearchTopBar(query, { query = it }) { searching = false; query = "" }
+                else -> LargeTopAppBar(
+                    title = { Text("Await") },
+                    actions = {
+                        IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "搜索") }
+                    },
+                    scrollBehavior = behavior
+                )
+            }
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { creating = true }) {
-                Icon(Icons.Default.Add, null)
-                Spacer(Modifier.width(6.dp))
-                Text("新建倒数日")
+            AnimatedVisibility(!selecting, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
+                ExtendedFloatingActionButton(
+                    onClick = { Nav.go("edit") },
+                    expanded = fabExpanded,
+                    // 收起成圆形按钮时也要让读屏念出用途
+                    modifier = Modifier.semantics { contentDescription = "新建倒数日" },
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text("新建倒数日") }
+                )
             }
         }
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            notificationHealth.homeWarning?.let {
-                HealthBanner(it, "设置", { showNotifications = true })
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp,
+                top = padding.calculateTopPadding() + 4.dp,
+                bottom = padding.calculateBottomPadding() + 96.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            notificationHealth.homeWarning?.let { warning ->
+                if (!searching && !selecting) item(key = "health") {
+                    HealthCard(warning) { Nav.go("notifications") }
+                }
             }
-            if (filtered.isEmpty() && (query.isNotBlank() || selectedGroup != null)) {
-                // 搜索/筛选无结果
-                Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("没有匹配的日程", style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = { query = ""; selectedGroup = null }) {
-                        Text("清除筛选")
+            if (!searching && (existingGroups.isNotEmpty() || selectedGroup != null)) {
+                item(key = "filters") {
+                    GroupFilterRow(existingGroups, hasUngrouped, selectedGroup) {
+                        haptics.tick(); selectedGroup = it
                     }
                 }
-            } else if (filtered.isEmpty()) {
-                EmptyState()
-            } else {
-                if (!searching && events.isNotEmpty()) {
-                    GroupFilterRow(
-                        groups = existingGroups,
-                        showUngrouped = hasUngrouped,
-                        selected = selectedGroup,
-                        onSelect = { selectedGroup = it }
-                    )
+            }
+            when {
+                events.isEmpty() -> item(key = "empty") { EmptyState() }
+                filtered.isEmpty() -> item(key = "nomatch") {
+                    NoMatch { query = ""; selectedGroup = null }
                 }
-                EventList(groups, viewModel,
-                    onClick = { editing = it },
-                    onSwipeDelete = { deleteWithUndo(it) })
+                else -> sections.forEach { (label, list) ->
+                    item(key = "header_$label") { SectionHeader(label, list.size) }
+                    items(list.size, key = { list[it].id }) { i ->
+                        val event = list[i]
+                        val selected = event.id in selection
+                        val card: @Composable () -> Unit = {
+                            EventCard(
+                                event = event,
+                                selected = selected,
+                                selecting = selecting,
+                                onClick = {
+                                    if (selecting) {
+                                        haptics.tick()
+                                        selection = if (selected) selection - event.id else selection + event.id
+                                    } else Nav.go("edit", event.id.toString())
+                                },
+                                onLongClick = { selection = selection + event.id }
+                            )
+                        }
+                        Box(Modifier.animateItem()) {
+                            if (selecting) card()
+                            else SwipeToDeleteBox(onDelete = { deleteWithUndo(setOf(event.id)) }, content = card)
+                        }
+                    }
+                }
             }
         }
     }
 
-    if (creating || editing != null) {
-        // key 保证切换/重开日程时表单状态完全重建，避免残留上一次的输入
-        key(editing?.id, creating) {
-            EditEventSheet(
-                initial = editing,
-                availableGroups = existingGroups,
-                onDismiss = { creating = false; editing = null },
-                onSave = { viewModel.upsert(it); creating = false; editing = null },
-                onDelete = {
-                    editing?.let { viewModel.delete(it.id) }
-                    creating = false; editing = null
-                }
+    if (moving) {
+        MoveToGroupSheet(
+            groups = existingGroups,
+            onDismiss = { moving = false },
+            onCreate = { viewModel.createGroup(it) }
+        ) { target ->
+            val n = viewModel.assignGroup(selection, target)
+            selection = emptySet()
+            val label = if (target.isBlank()) "未分组" else target
+            toaster.show(if (n > 0) "已把 $n 条日程移到「$label」" else "所选日程本来就在「$label」")
+        }
+    }
+    if (confirmDelete) {
+        ConfirmDialog(
+            title = "删除 ${selection.size} 条日程？",
+            text = "对应的提醒也会一并取消。",
+            confirm = "删除",
+            destructive = true,
+            onDismiss = { confirmDelete = false }
+        ) { deleteWithUndo(selection) }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchTopBar(query: String, onQuery: (String) -> Unit, onClose: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    TopAppBar(
+        navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭搜索") } },
+        title = {
+            TextField(
+                value = query,
+                onValueChange = onQuery,
+                placeholder = { Text("搜索标题或备注") },
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus)
             )
+        },
+        actions = {
+            if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }) { Icon(Icons.Default.Close, "清除") }
         }
-    }
-
-    // ── 管理分组对话框（多选 + 全选）──
-    if (showManageGroups) {
-        // 分组条目：名称 → 日程数。空串条目代表「未分组」，只在确实有未分组日程时出现。
-        // 名称取自 existingGroups 而不是现推，这样刚建的空分组（0 条）也会列出来
-        val counts = events.filter { it.group.isNotBlank() }.groupingBy { it.group }.eachCount()
-        val groupEntries = buildList {
-            addAll(existingGroups.map { it to (counts[it] ?: 0) })
-            if (hasUngrouped) add("" to events.count { it.group.isBlank() })
-        }
-        val allNames = groupEntries.map { it.first }.toSet()
-
-        fun closeManage() {
-            showManageGroups = false
-            selectedForDelete = emptySet()
-            newGroupName = ""
-        }
-
-        fun submitNewGroup() {
-            val name = newGroupName.trim()
-            if (name.isEmpty()) return
-            if (viewModel.createGroup(name)) {
-                newGroupName = ""
-                Toast.makeText(context, "已新建分组「$name」", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "分组「$name」已存在", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        AlertDialog(
-            onDismissRequest = { closeManage() },
-            title = { Text("管理分组") },
-            text = {
-                Column {
-                    // 新建分组：让「新建/编辑倒数日」不再是唯一入口，
-                    // 也允许先把分组建好、之后再往里放日程
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = newGroupName,
-                            onValueChange = { newGroupName = it },
-                            label = { Text("新建分组") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        FilledTonalButton(
-                            onClick = { submitNewGroup() },
-                            enabled = newGroupName.isBlank().not()
-                        ) { Text("添加") }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    if (groupEntries.isEmpty()) {
-                        Text("暂无分组", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        // 全选行：部分勾选时显示为不确定态
-                        val allState = when (selectedForDelete.size) {
-                            0 -> ToggleableState.Off
-                            allNames.size -> ToggleableState.On
-                            else -> ToggleableState.Indeterminate
-                        }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .triStateToggleable(allState) {
-                                    selectedForDelete =
-                                        if (allState == ToggleableState.On) emptySet() else allNames
-                                },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TriStateCheckbox(state = allState, onClick = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("全选", Modifier.weight(1f))
-                            Text(
-                                "${groupEntries.size} 个分组",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        HorizontalDivider()
-                        Column(
-                            Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            groupEntries.forEach { (name, count) ->
-                                val checked = name in selectedForDelete
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .toggleable(value = checked) { on ->
-                                            selectedForDelete =
-                                                if (on) selectedForDelete + name
-                                                else selectedForDelete - name
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(checked = checked, onCheckedChange = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            if (name.isBlank()) "未分组（默认）" else name,
-                                            style = MaterialTheme.typography.bodyLarge
-                                        )
-                                        Text(
-                                            "$count 条日程",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { confirmDeleteGroups = selectedForDelete },
-                    enabled = selectedForDelete.isNotEmpty()
-                ) {
-                    Text(
-                        "删除选中（${selectedForDelete.size}）",
-                        color = if (selectedForDelete.isEmpty()) Color.Unspecified
-                        else MaterialTheme.colorScheme.error
-                    )
-                }
-            },
-            dismissButton = { TextButton(onClick = { closeManage() }) { Text("完成") } }
-        )
-    }
-
-    // ── 分配日程到分组（多选 + 全选）──
-    // 两步走：先选目标分组，再勾日程。合在一屏里会让本来就不宽的对话框挤成一团
-    if (showAssign) {
-        fun closeAssign() {
-            showAssign = false
-            assignTarget = null
-            assignSelection = emptySet()
-        }
-
-        val target = assignTarget
-        val targetLabel = target?.let { if (it.isBlank()) "未分组" else it } ?: ""
-
-        AlertDialog(
-            onDismissRequest = { closeAssign() },
-            title = { Text(if (target == null) "分配到哪个分组" else "选择日程 → 「$targetLabel」") },
-            text = {
-                if (target == null) {
-                    Column(
-                        Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        if (existingGroups.isEmpty()) {
-                            Text(
-                                "还没有分组。可以先到「管理分组」里新建一个，" +
-                                    "或者把日程移出分组。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        existingGroups.forEach { name ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { assignTarget = name }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Label, null, Modifier.size(18.dp))
-                                Spacer(Modifier.width(10.dp))
-                                Text(name, Modifier.weight(1f))
-                                Text(
-                                    "${events.count { it.group == name }} 条",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        HorizontalDivider()
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { assignTarget = "" }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Close, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Text("未分组（把日程移出分组）", Modifier.weight(1f))
-                        }
-                    }
-                } else if (events.isEmpty()) {
-                    Text("还没有日程", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Column {
-                        val allIds = events.map { it.id }.toSet()
-                        val allState = when (assignSelection.size) {
-                            0 -> ToggleableState.Off
-                            allIds.size -> ToggleableState.On
-                            else -> ToggleableState.Indeterminate
-                        }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .triStateToggleable(allState) {
-                                    assignSelection =
-                                        if (allState == ToggleableState.On) emptySet() else allIds
-                                },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TriStateCheckbox(state = allState, onClick = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("全选", Modifier.weight(1f))
-                            Text(
-                                "${events.size} 条日程",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        HorizontalDivider()
-                        Column(
-                            Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            events.forEach { event ->
-                                val checked = event.id in assignSelection
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .toggleable(value = checked) { on ->
-                                            assignSelection =
-                                                if (on) assignSelection + event.id
-                                                else assignSelection - event.id
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(checked = checked, onCheckedChange = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            event.title,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            // 已经在目标分组里的标出来，免得白勾一遍
-                                            if (event.group == target) "已在此分组"
-                                            else if (event.group.isBlank()) "未分组"
-                                            else event.group,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                if (target != null) {
-                    TextButton(
-                        enabled = assignSelection.isNotEmpty(),
-                        onClick = {
-                            val n = viewModel.assignGroup(assignSelection, target)
-                            closeAssign()
-                            Toast.makeText(
-                                context,
-                                if (n > 0) "已把 $n 条日程分配到「$targetLabel」" else "所选日程本来就在该分组",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    ) { Text("分配（${assignSelection.size}）") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    // 选完分组还能退回上一步换一个，不用整个重开
-                    if (target != null) { assignTarget = null; assignSelection = emptySet() }
-                    else closeAssign()
-                }) { Text(if (target != null) "上一步" else "取消") }
-            }
-        )
-    }
-
-    // 批量删除二次确认
-    confirmDeleteGroups?.let { sel ->
-        val affected = events.count { it.group in sel }
-        val hasDefault = "" in sel
-        // 「未分组」没有分组可移出，唯一说得通的删除方式就是连日程一起删
-        var alsoDeleteEvents by remember(sel) { mutableStateOf(hasDefault) }
-        val deleteEvents = hasDefault || alsoDeleteEvents
-        val names = sel.sorted().joinToString("") {
-            if (it.isBlank()) "「未分组」" else "「$it」"
-        }
-
-        AlertDialog(
-            onDismissRequest = { confirmDeleteGroups = null },
-            title = { Text("删除 ${sel.size} 个分组？") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(if (affected == 0) "$names 下暂无日程。" else "$names 共 $affected 条日程。")
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .toggleable(value = deleteEvents, enabled = !hasDefault) {
-                                alsoDeleteEvents = it
-                            },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = deleteEvents,
-                            onCheckedChange = null,
-                            enabled = !hasDefault
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "同时删除这些日程（否则仅移出分组，日程保留）",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    if (hasDefault) {
-                        Text(
-                            "「未分组」是默认分组，没有分组可移出，只能连同日程一起删除。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val n = viewModel.deleteGroups(sel, deleteEvents)
-                    if (selectedGroup in sel) selectedGroup = null
-                    confirmDeleteGroups = null
-                    selectedForDelete = emptySet()
-                    showManageGroups = false
-                    Toast.makeText(
-                        context,
-                        // 空分组删掉时 n 为 0，报「已删除 0 条日程」会让人以为没删掉
-                        when {
-                            n == 0 -> "已删除 ${sel.size} 个分组"
-                            deleteEvents -> "已删除 $n 条日程"
-                            else -> "已将 $n 条日程移出分组"
-                        },
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton({ confirmDeleteGroups = null }) { Text("取消") }
-            }
-        )
-    }
-
-    // ── 备份与恢复 ──
-    if (showBackup) {
-        BackupScreen(viewModel = viewModel, onDismiss = { showBackup = false })
-    }
-
-    // ── 导入日程 ──
-    if (showImport) {
-        ImportScreen(viewModel = viewModel, onDismiss = { showImport = false })
-    }
-
-    if (showCloudDeployment) CloudDeploymentScreen(onDismiss = { showCloudDeployment = false })
-    if (showNotifications) NotificationScreen(onDismiss = { showNotifications = false })
-    if (showUpdate) UpdateScreen(initial = availableUpdate, onDismiss = { showUpdate = false; availableUpdate = null })
-    if (!showUpdate) availableUpdate?.let { update ->
-        AlertDialog(
-            onDismissRequest = { availableUpdate = null },
-            title = { Text("发现新版本 ${update.versionName}") },
-            text = { Text("可在软件内下载并安装更新。") },
-            confirmButton = { TextButton(onClick = { showUpdate = true }) { Text("查看更新") } },
-            dismissButton = { TextButton(onClick = { availableUpdate = null }) { Text("稍后") } }
-        )
-    }
-
-
+    )
 }
 
 /** 分组筛选行：全部 / 未分组 / 各分组 */
@@ -660,89 +282,72 @@ private fun GroupFilterRow(
     onSelect: (String?) -> Unit
 ) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        item {
-            FilterChip(
-                selected = selected == null,
-                onClick = { onSelect(null) },
-                label = { Text("全部") }
-            )
-        }
-        if (showUngrouped) {
-            item {
-                FilterChip(
-                    selected = selected == "",
-                    onClick = { onSelect("") },
-                    label = { Text("未分组") }
-                )
-            }
+        item { FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("全部") }) }
+        if (showUngrouped) item {
+            FilterChip(selected = selected == "", onClick = { onSelect("") }, label = { Text("未分组") })
         }
         items(groups.size, key = { groups[it] }) { i ->
             val name = groups[i]
             FilterChip(
                 selected = selected == name,
-                onClick = { onSelect(name) },
-                label = { Text(name) }
+                onClick = { onSelect(if (selected == name) null else name) },
+                label = { Text(name) },
+                leadingIcon = if (selected == name) {
+                    { Icon(Icons.Default.Check, null, Modifier.size(FilterChipDefaults.IconSize)) }
+                } else null
             )
         }
     }
 }
 
 @Composable
-private fun HealthBanner(
-    text: String,
-    actionLabel: String,
-    onClick: () -> Unit,
-    container: Color = MaterialTheme.colorScheme.errorContainer
-) {
-    Surface(tonalElevation = 2.dp, color = container) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text,
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            TextButton(onClick = onClick) { Text(actionLabel) }
+private fun HealthCard(text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.NotificationsOff, null)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("提醒可能无法送达", style = MaterialTheme.typography.titleSmall)
+                Text(text, style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("去设置", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
 
-private data class Groups(
-    val pinned: List<Event>,
-    val today: List<Event>,
-    val upcoming: List<Event>,
-    val past: List<Event>
-)
-
-private fun groupEvents(events: List<Event>): Groups {
+private fun groupEvents(events: List<Event>): List<Pair<String, List<Event>>> {
     val (pin, rest) = events.partition { it.pinned }
-    return Groups(
-        pinned = pin,
-        today = rest.filter { it.daysFromToday() == 0 },
-        upcoming = rest.filter { it.daysFromToday() > 0 },
-        past = rest.filter { it.daysFromToday() < 0 }
-    )
+    return listOf(
+        "置顶" to pin,
+        "今天" to rest.filter { it.daysFromToday() == 0 },
+        "即将到来" to rest.filter { it.daysFromToday() > 0 },
+        "已经过去" to rest.filter { it.daysFromToday() < 0 }
+    ).filter { it.second.isNotEmpty() }
 }
 
 /**
- * 右滑删除的包装：滑到底即触发 [onDelete]，滑出过程中露出红色底衬。
+ * 右滑删除的包装：滑过一半即触发 [onDelete]，滑出过程中露出红色底衬。
  *
  * 始终从左往右滑，方向不随系统的文字布局方向改变。
  */
 @Composable
-private fun SwipeToDeleteBox(
-    onDelete: () -> Unit,
-    content: @Composable () -> Unit
-) {
+private fun SwipeToDeleteBox(onDelete: () -> Unit, content: @Composable () -> Unit) {
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val deleteDirection = if (isRtl) SwipeToDismissBoxValue.EndToStart else SwipeToDismissBoxValue.StartToEnd
     val currentDeleteDirection by rememberUpdatedState(deleteDirection)
     val currentOnDelete by rememberUpdatedState(onDelete)
+    val haptics = rememberHaptics()
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == currentDeleteDirection) {
@@ -753,158 +358,186 @@ private fun SwipeToDeleteBox(
         // 要滑过卡片宽度的一半才算数，避免列表滚动时蹭一下就误删
         positionalThreshold = { it * 0.5f }
     )
+    // 越过删除阈值时震一下，告诉手指「松开就删」
+    val armed = state.targetValue == deleteDirection
+    LaunchedEffect(armed) { if (armed) haptics.tick() }
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = !isRtl,
         enableDismissFromEndToStart = isRtl,
         backgroundContent = {
+            val bg by animateColorAsState(
+                if (armed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.errorContainer,
+                label = "swipe"
+            )
+            val iconScale by animateFloatAsState(if (armed) 1.15f else 0.9f, label = "swipeIcon")
             Box(
                 Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(bg)
                     .padding(horizontal = 24.dp),
                 contentAlignment = AbsoluteAlignment.CenterLeft
             ) {
                 Icon(
-                    Icons.Default.Delete,
+                    Icons.Outlined.Delete,
                     contentDescription = "删除",
-                    tint = MaterialTheme.colorScheme.onErrorContainer
+                    tint = if (armed) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.graphicsLayer { scaleX = iconScale; scaleY = iconScale }
                 )
             }
         }
     ) { content() }
 }
 
-/** 列表按分组渲染 */
 @Composable
-private fun EventList(
-    groups: Groups,
-    viewModel: EventViewModel,
-    onClick: (Event) -> Unit,
-    onSwipeDelete: (Event) -> Unit
-) {
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+private fun SectionHeader(text: String, count: Int) {
+    Row(
+        Modifier.padding(start = 4.dp, top = 10.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        listOfNotNull(
-            ("置顶" to groups.pinned).takeIf { it.second.isNotEmpty() },
-            ("今天" to groups.today).takeIf { it.second.isNotEmpty() },
-            ("即将到来" to groups.upcoming).takeIf { it.second.isNotEmpty() },
-            ("已经过去" to groups.past).takeIf { it.second.isNotEmpty() }
-        ).forEach { (label, list) ->
-            item(key = "header_$label") {
-                SectionHeader(label)
-            }
-            items(list.size, key = { list[it].id }) { i ->
-                val event = list[i]
-                SwipeToDeleteBox(onDelete = { onSwipeDelete(event) }) {
-                    EventCard(
-                        event = event,
-                        onClick = { onClick(event) },
-                        onTogglePin = { viewModel.togglePin(event.id) }
-                    )
-                }
-            }
-        }
-        item { Spacer(Modifier.height(72.dp)) } // 给 FAB 留空间
+        Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        Text(
+            "  $count",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 4.dp)
-    )
-}
-
-/** 单条日程卡片：左侧色条 + 标题日期 + 右侧大字倒计时 */
+/** 单条日程卡片：色条 + 标题日期 + 右侧大字倒计时；多选时色条换成勾选圆点。 */
 @Composable
 private fun EventCard(
     event: Event,
+    selected: Boolean,
+    selecting: Boolean,
     onClick: () -> Unit,
-    onTogglePin: () -> Unit
+    onLongClick: () -> Unit
 ) {
     val accent = EventColors[Math.floorMod(event.colorIndex, EventColors.size)]
     val days = event.daysFromToday()
+    val colors = MaterialTheme.colorScheme
+    val container by animateColorAsState(
+        if (selected) colors.secondaryContainer else colors.surfaceContainerLow, label = "card"
+    )
 
-    ElevatedCard(
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = container,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .pressable(scale = 0.98f, onLongClick = onLongClick, onClick = onClick)
     ) {
-        Row(Modifier.height(IntrinsicSize.Min)) {
-            Box(
-                Modifier.width(6.dp).fillMaxHeight().background(accent)
-            )
-            Row(
-                Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            event.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        event.cycleLabel()?.let { label ->
-                            Text("  $label", fontSize = 11.sp, color = accent)
-                        }
+        Row(
+            Modifier.padding(start = 14.dp, end = 18.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(width = 24.dp, height = 44.dp), contentAlignment = Alignment.Center) {
+                if (selecting) {
+                    Box(
+                        Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(if (selected) colors.primary else Color.Transparent)
+                            .then(if (selected) Modifier else Modifier.border(1.5.dp, colors.outline, CircleShape)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (selected) Icon(Icons.Default.Check, null, Modifier.size(15.dp), tint = colors.onPrimary)
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        buildString {
-                            if (event.group.isNotBlank()) append("【${event.group}】 ")
-                            append(event.dateText())
-                            if (event.note.isNotBlank()) append("  ·  ${event.note}")
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    DayCounter(days, accent)
-                    Icon(
-                        Icons.Default.PushPin,
-                        contentDescription = "置顶",
-                        tint = if (event.pinned) accent else Color.Transparent,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(18.dp)
-                            .clickable { onTogglePin() }
+                } else {
+                    Box(
+                        Modifier
+                            .size(width = 5.dp, height = 40.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(accent)
                     )
                 }
             }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        event.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (event.pinned) {
+                        Icon(
+                            Icons.Filled.PushPin, "已置顶",
+                            tint = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 6.dp).size(14.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    event.dateText(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val tags = listOfNotNull(event.group.takeIf { it.isNotBlank() }, event.cycleLabel())
+                if (tags.isNotEmpty() || event.note.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        tags.forEach { Tag(it, accent) }
+                        if (event.note.isNotBlank()) {
+                            Text(
+                                event.note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            DayCounter(days, accent)
         }
     }
+}
+
+@Composable
+private fun Tag(text: String, accent: Color) {
+    Text(
+        text,
+        fontSize = 11.sp,
+        color = accent,
+        maxLines = 1,
+        modifier = Modifier
+            .padding(end = 6.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(accent.copy(alpha = 0.12f))
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    )
 }
 
 @Composable
 private fun DayCounter(days: Int, accent: Color) {
-    Row(verticalAlignment = Alignment.Bottom) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(horizontalAlignment = Alignment.End) {
         when {
-            days == 0 -> {
-                Text("今天", color = accent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            }
+            days == 0 -> Text("今天", color = accent, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             days > 0 -> {
-                Text("$days", color = accent, fontSize = 30.sp, fontWeight = FontWeight.Black)
-                Text(" 天", color = accent, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("$days", color = accent, fontSize = 32.sp, fontWeight = FontWeight.Black, lineHeight = 34.sp)
+                    Text(" 天", color = accent, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+                }
+                Text("还有", color = muted, fontSize = 11.sp)
             }
             else -> {
-                Text("${-days}", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text(" 天前", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("${-days}", color = muted, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 28.sp)
+                    Text(" 天", color = muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+                }
+                Text("已过去", color = muted, fontSize = 11.sp)
             }
         }
     }
@@ -913,21 +546,45 @@ private fun DayCounter(days: Int, accent: Color) {
 @Composable
 private fun EmptyState() {
     Column(
-        Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        Modifier.fillMaxWidth().padding(top = 96.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            Icons.Outlined.EventNote, null,
-            modifier = Modifier.size(84.dp),
-            tint = MaterialTheme.colorScheme.outline
-        )
-        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier.size(112.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.AutoMirrored.Outlined.EventNote, null,
+                modifier = Modifier.size(52.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        Spacer(Modifier.height(20.dp))
         Text("还没有倒数日", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
         Text(
-            "点击右下角按钮，创建第一个吧",
+            "生日、纪念日、订阅续费，都可以记在这里",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(20.dp))
+        FilledTonalButton(onClick = { Nav.go("edit") }) {
+            Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("新建倒数日")
+        }
+    }
+}
+
+@Composable
+private fun NoMatch(onClear: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 80.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Default.Search, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline)
+        Spacer(Modifier.height(12.dp))
+        Text("没有匹配的日程", style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = onClear) { Text("清除筛选") }
     }
 }
