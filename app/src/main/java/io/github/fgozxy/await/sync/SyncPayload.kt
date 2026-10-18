@@ -18,6 +18,8 @@ object SyncPayload {
                 mapOf("id" to event.id, "title" to event.title, "note" to event.note,
                     "date" to event.date.toString(), "cycle" to event.cycle.name,
                     "repeatN" to event.repeatN, "remindDaysBefore" to event.remindDaysBefore,
-                    "remindHour" to time.hour, "remindMinute" to time.minute)
+                    "remindHour" to time.hour, "remindMinute" to time.minute).let { fields ->
+                    if (event.isLunar) fields + ("calendarType" to "LUNAR") else fields
+                }
             }, "mergeGroups" to emptyList<Long>()))
 }

@@ -8,6 +8,14 @@ import java.net.URL
 class ServerException(val retryable: Boolean, message: String) : Exception(message)
 
 object ServerClient {
+    /** 旧服务会忽略未知字段，上传前必须确认历法能力，防止静默按公历调度。 */
+    fun checkCalendar(status: JsonObject, payload: JsonObject) {
+        val hasLunar = payload["events"].asJsonArray.any { it.asJsonObject["calendarType"]?.asString == "LUNAR" }
+        if (hasLunar && status["lunarCalendarProtocol"]?.asInt != 1) {
+            throw ServerException(false, "农历日程需要升级 Await 云端服务后才能同步或备份")
+        }
+    }
+
     fun checkChannels(config: SyncSettings.Config, channels: List<String>): JsonObject {
         val status = request(config, "GET", "/v1/status")
         if (status["notificationProtocol"]?.asInt != 1) {

@@ -33,10 +33,12 @@ object BackupService {
             value["eventCount"].asInt)
     }
 
-    private fun verifiedConfig(context: Context, write: Boolean = false): SyncSettings.Config {
+    private fun verifiedConfig(context: Context, write: Boolean = false, bundle: JsonObject? = null): SyncSettings.Config {
         check(CloudDeployment.isReady(context)) { "请先在云端部署配置中验证连接" }
         val config = SyncSettings.load(context)
-        val status = CloudDeployment.parse(ServerClient.request(config, "GET", "/v1/status"),
+        val response = ServerClient.request(config, "GET", "/v1/status")
+        if (bundle != null) ServerClient.checkCalendar(response, bundle)
+        val status = CloudDeployment.parse(response,
             SyncSettings.clientId(context), allowBackupRecovery = true)
         CloudDeployment.record(context, config, status)
         check(status.backupsEnabled) { "服务器未开启云端备份，请在 Docker 部署时设置 AWAIT_BACKUP_ENABLED=true" }
@@ -49,10 +51,10 @@ object BackupService {
         val result = runCatching {
             if (!manual && prefs.wifiOnly && !isOnWifi(context)) error("当前不是 WLAN 网络，已跳过")
             if (!isOnline(context)) error("网络不可用")
-            val config = verifiedConfig(context, write = true)
             val bundle = synchronized(SyncCoordinator.lock) {
                 JsonParser.parseString(BackupData.exportJson(context)).asJsonObject
             }
+            val config = verifiedConfig(context, write = true, bundle = bundle)
             val body = JsonObject().apply {
                 addProperty("clientId", SyncSettings.clientId(context))
                 addProperty("keepCount", prefs.keepCount)

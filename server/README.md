@@ -6,6 +6,10 @@ v2.4.0 手机提供统一默认通知时间，以及各日程的「精准时间�
 
 Python 3.12 实现，SQLite 持久化日程、发送队列和可选云端备份，`cryptography` 提供渠道凭据和备份加密。支持独立渠道选择、分别重试、当天 / 提前多天提醒、日 / 周 / 月 / 年循环；同一天、同一时刻的日程也逐条推送。月末和闰日以原始日期为锚点，不逐月漂移。提醒周期由服务器继续计算，不依赖手机持续上传。
 
+v2.5.0 新增农历日程。通知快照及备份可携带 `calendarType: "LUNAR"`；`date` / `dateEpochDay` 始终是对应公历日期，未指定历法时按公历。农历按月循环把闰月计为一个月，按年循环沿用原农历月日；小月取月末，下一大月恢复原日，闰月在无对应闰月的年份回退同名普通月。日 / 周循环按实际天数推进。`lunar_python` 与手机的 [lunar-java](https://github.com/6tail/lunar-java) 使用同一历法算法。
+
+升级时重新构建服务镜像并保留原数据卷；`/v1/status` 返回 `lunarCalendarProtocol: 1` 后即可同步农历日程。旧服务器无法正确计算农历周期，手机会阻止上传并提示升级，避免产生错误提醒。备份白名单也已支持历法字段，旧备份保持兼容。
+
 ## 部署
 
 初次部署只需从凭据库向进程环境注入 `AWAIT_API_KEY`，无需预先配置 Telegram 或 ntfy。消息渠道可在手机验证云端连接后配置；也兼容原有环境变量配置。不把凭据明文写入文件或命令参数：
@@ -84,7 +88,7 @@ v2.4.0 备份新增日程布尔字段 `preciseTime` 和外层 `defaultReminderTi
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | PUT | `/v1/schedule` | 原子替换手机日程快照与 `notificationChannels`（`telegram` / `ntfy`，可为空） |
-| GET | `/v1/status` | 日程数量、队列状态、最近错误、`notificationProtocol: 1`、`availableChannels`、`channelConfiguration`、`backupEnabled` / `backupProtocol` |
+| GET | `/v1/status` | 日程数量、队列状态、最近错误、`notificationProtocol: 1`、`lunarCalendarProtocol: 1`、`availableChannels`、`channelConfiguration`、`backupEnabled` / `backupProtocol` |
 | GET | `/v1/channels` | 渠道就绪状态、配置来源与非密钥参数，不返回 Token |
 | PUT | `/v1/channels/telegram` | 加密保存 `botToken` / `chatId`；Token 留空保留已有值 |
 | PUT | `/v1/channels/ntfy` | 加密保存 `url` / `topic` / 可选 `token`；`clearToken: true` 清除 Token |

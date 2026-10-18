@@ -22,9 +22,8 @@ import io.github.fgozxy.await.data.Cycle
 import io.github.fgozxy.await.data.Event
 import io.github.fgozxy.await.notify.ReminderSettings
 import io.github.fgozxy.await.ui.theme.EventColors
-import java.time.Instant
+import io.github.fgozxy.await.data.LunarDates
 import java.time.LocalDate
-import java.time.ZoneId
 
 private val REMIND_OPTIONS = listOf(
     0 to "当天", 1 to "提前1天", 3 to "提前3天", 7 to "提前7天",
@@ -49,6 +48,7 @@ fun EditEventSheet(
     var title by remember { mutableStateOf(initial?.title ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
     var dateEpochDay by remember { mutableStateOf(initial?.dateEpochDay ?: LocalDate.now().toEpochDay()) }
+    var isLunar by remember { mutableStateOf(initial?.isLunar ?: false) }
     var pinned by remember { mutableStateOf(initial?.pinned ?: false) }
     var cycle by remember { mutableStateOf(initial?.cycle ?: Cycle.NONE) }
     // 循环间隔数：每天/每周/每月时 N=1 表示「每」；N>1 表示「每隔N个单位」
@@ -100,8 +100,11 @@ fun EditEventSheet(
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("目标日期", style = MaterialTheme.typography.labelMedium)
-                        Text(LocalDate.ofEpochDay(dateEpochDay).toString(),
+                        Text(if (isLunar) LunarDates.text(LocalDate.ofEpochDay(dateEpochDay))
+                            else LocalDate.ofEpochDay(dateEpochDay).toString(),
                             style = MaterialTheme.typography.titleMedium)
+                        if (isLunar) Text("公历 ${LocalDate.ofEpochDay(dateEpochDay)}",
+                            style = MaterialTheme.typography.bodySmall)
                     }
                     Text("点击选择", style = MaterialTheme.typography.labelSmall)
                 }
@@ -185,7 +188,9 @@ fun EditEventSheet(
                 if (cycle != Cycle.NONE) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "倒计时和提醒将随周期自动滚动，无需手动更新",
+                        if (isLunar && cycle in listOf(Cycle.MONTH, Cycle.YEAR))
+                            "按农历循环；小月取月末，闰月在无对应闰月的年份按同名普通月提醒"
+                        else "倒计时和提醒将随周期自动滚动，无需手动更新",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -291,6 +296,7 @@ fun EditEventSheet(
                                 id = initial?.id ?: System.currentTimeMillis(),
                                 title = title.trim(),
                                 dateEpochDay = dateEpochDay,
+                                calendarType = if (isLunar) "LUNAR" else null,
                                 note = note.trim(),
                                 pinned = pinned,
                                 colorIndex = colorIndex,
@@ -311,25 +317,16 @@ fun EditEventSheet(
 
     // 日期选择对话框
     if (showDatePicker) {
-        val state = rememberDatePickerState(
-            initialSelectedDateMillis = dateEpochDay * 86_400_000L
+        EventDatePicker(
+            date = LocalDate.ofEpochDay(dateEpochDay),
+            isLunar = isLunar,
+            onDismiss = { showDatePicker = false },
+            onConfirm = { selected, lunar ->
+                dateEpochDay = selected.toEpochDay()
+                isLunar = lunar
+                showDatePicker = false
+            }
         )
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let {
-                        // DatePicker 返回 UTC 毫秒，转 epoch day 需按 UTC 取日期再回本地
-                        dateEpochDay = Instant.ofEpochMilli(it)
-                            .atZone(ZoneId.of("UTC")).toLocalDate().toEpochDay()
-                    }
-                    showDatePicker = false
-                }) { Text("确定") }
-            },
-            dismissButton = { TextButton({ showDatePicker = false }) { Text("取消") } }
-        ) {
-            DatePicker(state)
-        }
     }
 
     // 时间选择对话框

@@ -51,7 +51,9 @@ data class Event(
     val repeatEveryDays: Int = 0,
     val repeatYearly: Boolean = false,
     /** 自定义分组名（如「订阅」「生日」），null/空串表示未分组 */
-    val groupName: String? = null
+    val groupName: String? = null,
+    /** null / SOLAR 为公历；LUNAR 的月、年循环按农历计算。 */
+    val calendarType: String? = null
 ) {
     /**
      * 当前循环配置（每次访问即时解析，兼容三代数据格式）。
@@ -69,7 +71,9 @@ data class Event(
     /** 分组名的空安全版本；未分组返回空串 */
     val group: String get() = groupName ?: ""
 
-    /** 目标日期 */
+    val isLunar: Boolean get() = calendarType == "LUNAR"
+
+    /** 目标日期（始终保存对应公历，兼容旧数据和按天提醒） */
     val date: LocalDate get() = LocalDate.ofEpochDay(dateEpochDay)
 
     /**
@@ -86,7 +90,8 @@ data class Event(
     /** 展示用日期文本。循环事件显示下一周期的日期 */
     fun dateText(): String {
         val d = nextOccurrence()
-        return "%04d-%02d-%02d".format(d.year, d.monthValue, d.dayOfMonth)
+        val solar = "%04d-%02d-%02d".format(d.year, d.monthValue, d.dayOfMonth)
+        return if (isLunar) "$solar · ${LunarDates.text(d)}" else solar
     }
 
     /** 循环徽标文本；不重复返回 null。如「↻每月」「↻每2周」「↻每45天」「↻每4年」 */
@@ -94,6 +99,8 @@ data class Event(
         val r = repeat
         return when {
             r.cycle == Cycle.NONE -> null
+            isLunar && r.cycle in listOf(Cycle.MONTH, Cycle.YEAR) ->
+                "↻农历每${if (r.n <= 1) "" else r.n}${r.cycle.unit}"
             r.n <= 1 -> "↻每${r.cycle.unit}"
             else -> "↻每${r.n}${r.cycle.unit}"
         }
@@ -111,6 +118,25 @@ data class Event(
         val r = repeat
         if (r.cycle == Cycle.NONE) return target.takeIf { !it.isBefore(threshold) }
         if (!target.isBefore(threshold)) return target
+
+        if (isLunar && r.cycle in listOf(Cycle.MONTH, Cycle.YEAR)) {
+            // 二分查找避免闰月导致公历月份估算偏差，也避免逐日/逐月扫描。
+            var low = 0L
+            val limit = 15000L / r.n + 1
+            var high = 1L
+            while (high < limit) {
+                val candidate = occurrenceAt(high)
+                if (candidate == null || !candidate.isBefore(threshold)) break
+                high = minOf(high * 2, limit)
+            }
+            while (low < high) {
+                val mid = (low + high) / 2
+                val candidate = occurrenceAt(mid)
+                if (candidate == null || !candidate.isBefore(threshold)) high = mid
+                else low = mid + 1
+            }
+            return occurrenceAt(low)
+        }
 
         val units = when (r.cycle) {
             Cycle.DAY -> ChronoUnit.DAYS.between(target, threshold)
@@ -132,6 +158,9 @@ data class Event(
     /** 始终以原始目标日期为锚点计算第 [index] 个周期，避免月末/闰日漂移。 */
     private fun occurrenceAt(index: Long): LocalDate? = runCatching {
         val amount = Math.multiplyExact(repeat.n.toLong(), index)
+        if (isLunar && repeat.cycle in listOf(Cycle.MONTH, Cycle.YEAR)) {
+            return@runCatching LunarDates.occurrence(date, repeat.cycle, Math.toIntExact(amount))
+        }
         when (repeat.cycle) {
             Cycle.DAY -> date.plusDays(amount)
             Cycle.WEEK -> date.plusWeeks(amount)
@@ -165,6 +194,7 @@ data class Event(
             ?: LocalDate.now().toEpochDay()
 
         return copy(
+            calendarType = calendarType?.takeIf { it == "LUNAR" },
             title = safeTitle,
             dateEpochDay = safeDate,
             note = safeNote,

@@ -41,7 +41,7 @@ def validate_bundle(body):
         raise ValueError("Invalid backup event count")
     event_fields = {"id", "title", "dateEpochDay", "note", "pinned", "colorIndex", "remindDaysBefore",
                     "remindHour", "remindMinute", "repeatSpec", "repeatCycle", "repeatEveryDays",
-                    "repeatYearly", "groupName", "preciseTime"}
+                    "repeatYearly", "groupName", "preciseTime", "calendarType"}
     ids = set()
     for event in events:
         if not isinstance(event, dict) or not set(event) <= event_fields:
@@ -49,6 +49,8 @@ def validate_bundle(body):
         if type(event.get("id")) is not int or not -(2**63) <= event["id"] < 2**63 or event["id"] in ids:
             raise ValueError("Invalid backup event ID")
         ids.add(event["id"])
+        if event.get("calendarType") not in (None, "SOLAR", "LUNAR"):
+            raise ValueError("Invalid backup calendar type")
         if not isinstance(event.get("title"), str) or not event["title"].strip():
             raise ValueError("Invalid backup event title")
         if type(event.get("dateEpochDay")) is not int or not -25567 <= event["dateEpochDay"] <= 376199:

@@ -1,1 +1,2 @@
 cryptography==50.0.2
+lunar_python==1.4.8

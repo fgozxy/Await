@@ -1,5 +1,7 @@
 """Single-writer Await schedule API and durable per-channel delivery queues."""
 import calendar
+from functools import lru_cache
+from lunar_python import Solar, Lunar, LunarMonth
 import base64
 import hashlib
 import hmac
@@ -99,15 +101,27 @@ def validate_snapshot(raw):
         cycle = event.get("cycle", "NONE")
         if cycle not in ("NONE", "DAY", "WEEK", "MONTH", "YEAR"):
             raise ValueError("Invalid cycle")
+        calendar_type = event.get("calendarType", "SOLAR")
+        if calendar_type not in ("SOLAR", "LUNAR"):
+            raise ValueError("Invalid calendar type")
         normalized.append(dict(
             id=event_id, title=title.strip(), note=note, date=event_date.isoformat(),
             remindDaysBefore=offsets, remindHour=integer(event.get("remindHour"), 0, 23),
             remindMinute=integer(event.get("remindMinute"), 0, 59), cycle=cycle,
             repeatN=integer(event.get("repeatN", 1), 1, 3650)))
+        if calendar_type == "LUNAR":
+            normalized[-1]["calendarType"] = "LUNAR"
     # Legacy mergeGroups is intentionally ignored; each event has its own delivery.
     channels = validate_channels(raw.get("notificationChannels", ["telegram"]))
     return dict(clientId=client, revision=revision, timezone=zone, notificationChannels=channels,
                 events=sorted(normalized, key=lambda e: e["id"]), mergeGroups=[])
+
+
+@lru_cache(maxsize=4096)
+def lunar_anchor(iso_date):
+    anchor = date.fromisoformat(iso_date)
+    lunar = Solar.fromYmd(anchor.year, anchor.month, anchor.day).getLunar()
+    return lunar.getYear(), lunar.getMonth(), lunar.getDay()
 
 
 def occurrence(event, index):
@@ -117,6 +131,21 @@ def occurrence(event, index):
         return anchor
     if cycle in ("DAY", "WEEK"):
         return anchor + timedelta(days=amount * (7 if cycle == "WEEK" else 1))
+    if event.get("calendarType") == "LUNAR":
+        year, month, day = lunar_anchor(event["date"])
+        if cycle == "YEAR":
+            year += amount
+            if not 1899 <= year <= 2999:
+                raise ValueError("Lunar year out of range")
+            target = LunarMonth.fromYm(year, month) or LunarMonth.fromYm(year, abs(month))
+        else:
+            if not 0 <= amount <= 15000:
+                raise ValueError("Lunar month out of range")
+            target = LunarMonth.fromYm(year, month).next(amount)
+        if not 1899 <= target.getYear() <= 2999:
+            raise ValueError("Lunar year out of range")
+        solar = Lunar.fromYmd(target.getYear(), target.getMonth(), min(day, target.getDayCount())).getSolar()
+        return date(solar.getYear(), solar.getMonth(), solar.getDay())
     months = anchor.year * 12 + anchor.month - 1 + amount * (12 if cycle == "YEAR" else 1)
     year, month0 = divmod(months, 12)
     return date(year, month0 + 1, min(anchor.day, calendar.monthrange(year, month0 + 1)[1]))
@@ -127,6 +156,27 @@ def first_index(event, threshold):
     if anchor >= threshold or event["cycle"] == "NONE":
         return 0
     cycle = event["cycle"]
+    if event.get("calendarType") == "LUNAR" and cycle in ("MONTH", "YEAR"):
+        low, high = 0, 1
+        limit = 15000 // event["repeatN"] + 1
+        while high < limit:
+            try:
+                if occurrence(event, high) >= threshold:
+                    break
+            except (ValueError, OverflowError):
+                break
+            high = min(high * 2, limit)
+        while low < high:
+            mid = (low + high) // 2
+            try:
+                candidate = occurrence(event, mid)
+            except (ValueError, OverflowError):
+                candidate = date.max
+            if candidate >= threshold:
+                high = mid
+            else:
+                low = mid + 1
+        return low
     if cycle in ("DAY", "WEEK"):
         units = (threshold - anchor).days // (7 if cycle == "WEEK" else 1)
     elif cycle == "MONTH":
@@ -518,7 +568,7 @@ class ScheduleStore:
                         backupEnabled=bool(self.backups and self.backups.enabled),
                         backupProtocol=1 if self.backups and self.backups.enabled else 0,
                         channelConfiguration=self.channel_settings is not None,
-                        notificationProtocol=1, availableChannels=sorted(self.senders),
+                        notificationProtocol=1, lunarCalendarProtocol=1, availableChannels=sorted(self.senders),
                         notificationChannels=snapshot["notificationChannels"] if snapshot else [],
                         clientId=snapshot["clientId"] if snapshot else self.backups.owner() if self.backups else "",
                         eventCount=len(snapshot["events"]) if snapshot else 0,

@@ -94,7 +94,7 @@ object BackupData {
 
 规则：
 1. title 必填，其余字段截图里没有就省略，不要编造。
-2. date 一律写成 YYYY-MM-DD。
+2. date 一律写成公历 YYYY-MM-DD；截图明确是农历时，换算为对应公历，并增加 "calendarType": "LUNAR"；农历闰月不得按普通月换算，无法确定时不要猜测。
 3. repeatSpec 取值 "DAY:N" "WEEK:N" "MONTH:N" "YEAR:N"，N 为间隔数；
    生日、纪念日用 "YEAR:1"；不重复的条目省略该字段。
 4. remindDaysBefore 是提前几天提醒的数组，0 表示当天，可多选，如 [0, 1, 7]；截图未明确指定时省略该字段，默认仅当天提醒。

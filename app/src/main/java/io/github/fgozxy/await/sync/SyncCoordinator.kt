@@ -96,6 +96,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : Worker(contex
                 return Result.success()
             }
             val status = ServerClient.checkChannels(config, NotificationChannels.remote(NotificationChannels.load(applicationContext)))
+            ServerClient.checkCalendar(status, com.google.gson.JsonParser.parseString(payload).asJsonObject)
             CloudDeployment.record(applicationContext, config,
                 CloudDeployment.parse(status, SyncSettings.clientId(applicationContext)))
             ServerClient.request(config, "PUT", "/v1/schedule", payload)
