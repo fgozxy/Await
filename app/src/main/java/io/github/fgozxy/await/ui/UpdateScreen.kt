@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -105,7 +104,58 @@ fun UpdateScreen() {
 
     LaunchedEffect(Unit) { if (initial == null) check() }
 
-    PageScaffold(title = "软件更新") { padding ->
+    // 操作按钮固定在底部：更新说明再长也不用下滑去找
+    PageScaffold(title = "软件更新", bottomBar = {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+            Column(
+                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                progress?.let {
+                    LinearProgressIndicator(progress = { it / 100f }, modifier = Modifier.fillMaxWidth())
+                }
+                if (result.isNotBlank() || progress != null) {
+                    Text(
+                        progress?.let { "已下载 $it%" } ?: result,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (progress != null) {
+                        OutlinedButton(
+                            onClick = { toaster.show("已取消下载"); downloadJob?.cancel() },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("取消下载") }
+                    }
+                    val info = release
+                    Button(
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        onClick = {
+                            val apk = ready
+                            when {
+                                info == null -> check()
+                                apk != null && apk.isFile -> install(apk)
+                                else -> download(info)
+                            }
+                        }
+                    ) {
+                        if (busy && progress == null) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp,
+                                color = LocalContentColor.current)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(when {
+                            info == null -> if (busy) "正在检查…" else "检查更新"
+                            ready != null -> "安装更新"
+                            else -> "下载并安装"
+                        })
+                    }
+                }
+            }
+        }
+    }) { padding ->
         PageColumn(padding) {
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 // 与桌面图标同一组图层，按 108dp 画布裁出中间 72dp 可见区
@@ -135,41 +185,11 @@ fun UpdateScreen() {
                         Text("安装包 %.1f MB".format(info.sizeBytes / 1024.0 / 1024.0),
                             style = MaterialTheme.typography.labelLarge)
                         Text(info.notes.ifBlank { "此版本没有更新说明" }, style = MaterialTheme.typography.bodyMedium)
-                        progress?.let {
-                            LinearProgressIndicator(progress = { it / 100f }, modifier = Modifier.fillMaxWidth())
-                            Text("已下载 $it%", style = MaterialTheme.typography.labelMedium)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(enabled = !busy, onClick = {
-                                val apk = ready
-                                if (apk != null && apk.isFile) install(apk) else download(info)
-                            }) { Text(if (ready == null) "下载并安装" else "安装更新") }
-                            if (progress != null) {
-                                TextButton(onClick = { toaster.show("已取消下载"); downloadJob?.cancel() }) { Text("取消下载") }
-                            }
-                        }
                     }
                 }
             }
-            if (result.isNotBlank()) {
-                Text(
-                    result,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
 
             PrefGroup(footer = "更新来自 GitHub Releases，优先经 HubProxy 加速；下载后校验 SHA-256、包名和签名。") {
-                PrefRow(
-                    title = "检查更新",
-                    icon = Icons.Outlined.Refresh,
-                    enabled = !busy,
-                    onClick = ::check,
-                    trailing = if (busy && progress == null) {
-                        { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
-                    } else null
-                )
                 SwitchRow(
                     title = "自动检查更新",
                     subtitle = "打开软件时每天检查一次",
